@@ -42,74 +42,111 @@ function toCamelCase(name: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a map of React setter names → signal names from the IR.
- * e.g., { setCount: 'count', setName: 'name' }
- */
-function buildSetterMap(state: StateDefinition[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const s of state) {
-    map.set(s.setterName, s.variableName);
-  }
-  return map;
-}
-
-/**
- * Build a set of state variable names that became signals.
- */
-function buildStateVarSet(state: StateDefinition[]): Set<string> {
-  return new Set(state.map((s) => s.variableName));
-}
-
-/**
- * Rewrite React state expressions to Angular signal syntax in a code string.
+ * Rewrite a JavaScript/TypeScript code body (method body, effect body, computed)
+ * to use Angular signal syntax.
  *
- * Transforms:
- * - `setCount(count + 1)` → `count.set(count() + 1)`
- * - `setCount(prev => prev + 1)` → `count.update((prev) => prev + 1)`
- * - `() => setCount(count + 1)` → `count.set(count() + 1)`
- * - bare `count` reads (as state var) → `count()` (signal read)
+ * - `setCount(prev => prev + 1)` → `this.count.update((prev) => prev + 1)`
+ * - `setCount(value)` → `this.count.set(value)`
+ * - bare `count` reads → `this.count()`
+ * - `React.FormEvent` → `Event`
+ * - `inputRef.current` → `this.inputRef()?.nativeElement`
  */
-function rewriteToSignalSyntax(
-  code: string,
-  setterMap: Map<string, string>,
-  stateVars: Set<string>,
-): string {
-  let result = code;
+function rewriteCodeBody(body: string, ir: ComponentIR): string {
+  if (ir.state.length === 0 && ir.refs.length === 0) return body;
+  let result = body;
 
-  // 1. Rewrite setter calls: setX(prev => ...) → x.update((prev) => ...)
-  //    and setX(value) → x.set(value)
-  for (const [setter, signalName] of setterMap) {
-    // Pattern: setX(prev => expr) or setX((prev) => expr) → x.update(...)
-    const updaterRegex = new RegExp(
-      `${setter}\\(\\s*\\(?\\s*(\\w+)\\s*\\)?\\s*=>\\s*`,
+  // 1. Rewrite setter calls with updater function: setX(prev => ...) → this.x.update(...)
+  for (const s of ir.state) {
+    const updaterPattern = new RegExp(
+      `\\b${s.setterName}\\(\\s*\\(?\\s*(\\w+)\\s*\\)?\\s*=>`,
       'g',
     );
-    if (updaterRegex.test(result)) {
+    result = result.replace(updaterPattern, `this.${s.variableName}.update(($1) =>`);
+  }
+
+  // 2. Rewrite setter calls with direct value: setX(expr) → this.x.set(expr)
+  for (const s of ir.state) {
+    result = result.replace(
+      new RegExp(`\\b${s.setterName}\\(`, 'g'),
+      `this.${s.variableName}.set(`,
+    );
+  }
+
+  // 3. Rewrite state variable reads: count → this.count()
+  for (const s of ir.state) {
+    result = result.replace(
+      new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.=])`, 'g'),
+      `this.${s.variableName}()`,
+    );
+  }
+
+  // 4. Rewrite DOM ref access: inputRef.current → this.inputRef()?.nativeElement
+  for (const r of ir.refs) {
+    if (r.isDomRef) {
       result = result.replace(
-        new RegExp(`${setter}\\(\\s*\\(?\\s*(\\w+)\\s*\\)?\\s*=>`, 'g'),
-        `${signalName}.update(($1) =>`,
-      );
-    } else {
-      // Pattern: setX(expr) → x.set(expr)
-      result = result.replace(
-        new RegExp(`${setter}\\(`, 'g'),
-        `${signalName}.set(`,
+        new RegExp(`\\b${r.variableName}\\.current\\b`, 'g'),
+        `this.${r.variableName}()?.nativeElement`,
       );
     }
   }
 
-  // 2. Remove arrow function wrappers: () => expr → expr
-  //    This handles onClick={() => count.set(...)} → count.set(...)
-  result = result.replace(/\(\)\s*=>\s*/g, '');
+  // 5. Replace React types with Angular equivalents
+  result = result.replace(/React\.FormEvent/g, 'Event');
+  result = result.replace(/React\.ChangeEvent<[^>]*>/g, 'Event');
+  result = result.replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent');
 
-  // 3. Rewrite state variable reads to signal reads: count → count()
-  //    Only for standalone identifiers, not when already followed by ( or .
-  for (const varName of stateVars) {
-    // Match varName that is NOT preceded by . and NOT followed by ( or . or =
-    // Use word boundary to avoid partial matches
+  return result;
+}
+
+/**
+ * Rewrite an event handler expression from the template.
+ * Handles patterns like:
+ * - `(e) => setNewTitle(e.target.value)` → `newTitle.set($event.target.value)`
+ * - `() => toggleTask(task.id)` → `toggleTask(task.id)`
+ * - `() => setCount(count + 1)` → `count.set(count() + 1)`
+ * - `handleSubmit` → `handleSubmit($event)`
+ */
+function rewriteTemplateEventHandler(expr: string, ir: ComponentIR): string {
+  let result = expr;
+
+  // Strip outer arrow: (e) => body or () => body → body
+  // Match: (params) => body  or  () => body
+  const arrowMatch = result.match(/^\s*\(?([^)]*)\)?\s*=>\s*([\s\S]+)$/);
+  if (arrowMatch) {
+    const params = arrowMatch[1].trim();
+    let body = arrowMatch[2].trim();
+
+    // Replace the event parameter (e, event, evt) with $event
+    if (params && params !== '') {
+      const paramName = params.split(/[,:]/)[0].trim();
+      body = body.replace(new RegExp(`\\b${paramName}\\b`, 'g'), '$event');
+    }
+
+    result = body;
+  }
+
+  // Rewrite setter calls with updater: setX(prev => ...) → x.update(...)
+  for (const s of ir.state) {
+    const updaterPattern = new RegExp(
+      `\\b${s.setterName}\\(\\s*\\(?\\s*(\\w+)\\s*\\)?\\s*=>`,
+      'g',
+    );
+    result = result.replace(updaterPattern, `${s.variableName}.update(($1) =>`);
+  }
+
+  // Rewrite setter calls with direct value: setX(expr) → x.set(expr)
+  for (const s of ir.state) {
     result = result.replace(
-      new RegExp(`(?<!\\.)\\b${varName}\\b(?!\\s*[(.=])`, 'g'),
-      `${varName}()`,
+      new RegExp(`\\b${s.setterName}\\(`, 'g'),
+      `${s.variableName}.set(`,
+    );
+  }
+
+  // Rewrite state variable reads in the expression: count → count()
+  for (const s of ir.state) {
+    result = result.replace(
+      new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.=])`, 'g'),
+      `${s.variableName}()`,
     );
   }
 
@@ -117,34 +154,68 @@ function rewriteToSignalSyntax(
 }
 
 /**
- * Rewrite the Angular template to use signal syntax for event handlers
- * and interpolations.
+ * Rewrite the Angular template to use signal reads and proper event handlers.
+ * Only rewrites inside attribute values and interpolations, not plain text.
  */
-function rewriteTemplate(
-  template: string,
-  state: StateDefinition[],
-): string {
-  if (state.length === 0) return template;
+function rewriteTemplate(template: string, ir: ComponentIR): string {
+  if (ir.state.length === 0) return template;
+  let result = template;
 
-  const setterMap = buildSetterMap(state);
-  const stateVars = buildStateVarSet(state);
+  // 1. Rewrite event handler attribute values: (click)="expr" → (click)="rewritten"
+  result = result.replace(
+    /\((click|change|submit|input|focus|blur|keydown|keyup|mouseenter|mouseleave)\)="([^"]*)"/g,
+    (_match, event, expr) => {
+      const rewritten = rewriteTemplateEventHandler(expr, ir);
+      return `(${event})="${rewritten}"`;
+    },
+  );
 
-  return rewriteToSignalSyntax(template, setterMap, stateVars);
-}
+  // 2. Rewrite interpolations: {{ expr }} → {{ expr() }} for signal reads
+  result = result.replace(
+    /\{\{\s*([^}]+)\s*\}\}/g,
+    (_match, expr) => {
+      let rewritten = expr.trim();
+      for (const s of ir.state) {
+        rewritten = rewritten.replace(
+          new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.])`, 'g'),
+          `${s.variableName}()`,
+        );
+      }
+      return `{{ ${rewritten} }}`;
+    },
+  );
 
-/**
- * Rewrite method bodies to use signal syntax.
- */
-function rewriteMethodBody(
-  body: string,
-  state: StateDefinition[],
-): string {
-  if (state.length === 0) return body;
+  // 3. Rewrite property bindings: [value]="expr" → [value]="expr()" for signals
+  result = result.replace(
+    /\[(\w+)\]="([^"]*)"/g,
+    (_match, prop, expr) => {
+      let rewritten = expr;
+      for (const s of ir.state) {
+        rewritten = rewritten.replace(
+          new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.])`, 'g'),
+          `${s.variableName}()`,
+        );
+      }
+      return `[${prop}]="${rewritten}"`;
+    },
+  );
 
-  const setterMap = buildSetterMap(state);
-  const stateVars = buildStateVarSet(state);
+  // 4. Rewrite @if conditions for signal reads
+  result = result.replace(
+    /@if\s*\(([^)]+)\)/g,
+    (_match, condition) => {
+      let rewritten = condition;
+      for (const s of ir.state) {
+        rewritten = rewritten.replace(
+          new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.])`, 'g'),
+          `${s.variableName}()`,
+        );
+      }
+      return `@if (${rewritten})`;
+    },
+  );
 
-  return rewriteToSignalSyntax(body, setterMap, stateVars);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,22 +513,35 @@ function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
  * produces string content for each output file.
  */
 export function emitAngularArtifact(ir: ComponentIR): AngularArtifact {
-  // Rewrite template and method bodies to use Angular signal syntax
-  const rewrittenTemplate = rewriteTemplate(ir.angularTemplate, ir.state);
+  // Rewrite template to use Angular signal syntax for event handlers and interpolations
+  const rewrittenTemplate = rewriteTemplate(ir.angularTemplate, ir);
+
+  // Rewrite method bodies to use this.signal() and this.signal.set/update
   const rewrittenMethods = ir.componentMethods.map((m) => ({
     ...m,
-    body: rewriteMethodBody(m.body, ir.state),
+    body: rewriteCodeBody(m.body, ir),
+    // Replace React types in parameters
+    parameters: m.parameters.map((p) => ({
+      ...p,
+      type: p.type.replace(/React\.FormEvent/g, 'Event')
+                   .replace(/React\.ChangeEvent<[^>]*>/g, 'Event')
+                   .replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent'),
+    })),
   }));
+
+  // Rewrite effect bodies
   const rewrittenEffects = ir.angularEffects.map((e) => ({
     ...e,
-    body: rewriteMethodBody(e.body, ir.state),
+    body: rewriteCodeBody(e.body, ir),
     cleanupFunction: e.cleanupFunction
-      ? rewriteMethodBody(e.cleanupFunction, ir.state)
+      ? rewriteCodeBody(e.cleanupFunction, ir)
       : undefined,
   }));
+
+  // Rewrite computed function bodies
   const rewrittenComputed = ir.angularComputed.map((c) => ({
     ...c,
-    computeFunction: rewriteMethodBody(c.computeFunction, ir.state),
+    computeFunction: rewriteCodeBody(c.computeFunction, ir),
   }));
 
   const rewrittenIR: ComponentIR = {

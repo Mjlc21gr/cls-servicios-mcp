@@ -3,8 +3,6 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createServer as createHttpServer } from 'node:http';
 import { createServer } from './server.js';
 const PORT = Number(process.env.MCP_PORT) || 3200;
-// Map sessionId → transport para mantener sesiones SSE activas
-const transports = new Map();
 async function handleMcp(req, res) {
     // Crear transport stateless (una instancia por request POST, sesiones para GET/DELETE)
     const transport = new StreamableHTTPServerTransport({

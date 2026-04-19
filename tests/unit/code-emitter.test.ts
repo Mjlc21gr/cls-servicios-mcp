@@ -176,7 +176,7 @@ describe('Code Emitter - emitAngularArtifact', () => {
         ],
       });
       const result = emitAngularArtifact(ir);
-      expect(result.componentFile).toContain('@Input() title: string!');
+      expect(result.componentFile).toContain('@Input() title!: string');
       expect(result.componentFile).toContain('@Input() count: number = 0');
     });
 

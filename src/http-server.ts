@@ -10,9 +10,6 @@ import { createServer } from './server.js';
 
 const PORT = Number(process.env.MCP_PORT) || 3200;
 
-// Map sessionId → transport para mantener sesiones SSE activas
-const transports = new Map<string, StreamableHTTPServerTransport>();
-
 async function handleMcp(req: IncomingMessage, res: ServerResponse) {
   // Crear transport stateless (una instancia por request POST, sesiones para GET/DELETE)
   const transport = new StreamableHTTPServerTransport({

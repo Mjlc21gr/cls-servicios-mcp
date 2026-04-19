@@ -1,0 +1,1 @@
+{"version":3,"file":"style-aggregator.d.ts","sourceRoot":"","sources":["../../src/pipeline/style-aggregator.ts"],"names":[],"mappings":"AAIA,OAAO,KAAK,EACV,cAAc,EACd,oBAAoB,EACpB,gBAAgB,EAChB,qBAAqB,EACtB,MAAM,qBAAqB,CAAC;AA8N7B;;;;;;;;;;GAUG;AACH,wBAAgB,eAAe,CAC7B,cAAc,EAAE,cAAc,EAC9B,qBAAqB,EAAE,WAAW,CAAC,MAAM,EAAE,oBAAoB,CAAC,EAChE,OAAO,CAAC,EAAE,gBAAgB,GACzB,qBAAqB,CAyFvB"}

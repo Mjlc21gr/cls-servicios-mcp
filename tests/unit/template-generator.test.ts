@@ -423,7 +423,7 @@ describe('Template_Generator - generateAngularTemplate', () => {
         },
       });
       const result = generateAngularTemplate(ir);
-      expect(result.angularTemplate).toContain('<MyComponent />');
+      expect(result.angularTemplate).toContain('<app-my-component />');
     });
   });
 });

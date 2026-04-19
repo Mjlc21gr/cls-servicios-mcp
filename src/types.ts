@@ -298,6 +298,7 @@ export interface AngularArtifact {
   specFile: string; // .spec.ts content
   tailwindConfig: string; // tailwind.config.js content
   templateFile?: string; // .component.html content (if not inline)
+  scssFile: string; // .component.scss content
   services: ServiceFile[]; // Services generated from custom hooks
   securityWarnings: SecurityWarning[];
 }

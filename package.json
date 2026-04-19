@@ -1,21 +1,27 @@
 {
-  "name": "react-to-angular-mcp",
+  "name": "@cls/mcp-front-migrate",
   "version": "1.0.0",
-  "description": "MCP server that converts React (JSX/TSX) code to Angular 19+ modern code",
+  "description": "MCP Server para migración de micro-frontends React → Angular CLS con pipeline completo",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
+    "mcp-front-migrate": "dist/cli.js",
     "react-to-angular-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "dev": "ts-node --esm src/index.ts",
+    "lint": "eslint src/**/*.ts"
   },
   "dependencies": {
     "@babel/parser": "^7.27.0",
     "@babel/traverse": "^7.27.0",
+    "@babel/types": "^7.29.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@octokit/rest": "^21.1.1",
+    "commander": "^13.1.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

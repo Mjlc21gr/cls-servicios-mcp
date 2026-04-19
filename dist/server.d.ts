@@ -35,11 +35,6 @@ export declare const moduleSchema: {
         path: string;
     }>, "many">;
 };
-/**
- * Handler for convert_react_to_angular tool.
- * Runs the full pipeline: Security Validator → AST_Parser → State_Mapper →
- * Template_Generator → PrimeNG_Mapper → Code Emitter.
- */
 export declare function convertHandler(args: {
     sourceCode: string;
 }): Promise<{
@@ -48,9 +43,6 @@ export declare function convertHandler(args: {
         text: string;
     }[];
 }>;
-/**
- * Handler for generate_microfrontend_shell tool.
- */
 export declare function shellHandler(args: {
     appName: string;
     remotes: Array<{
@@ -65,9 +57,6 @@ export declare function shellHandler(args: {
         text: string;
     }[];
 }>;
-/**
- * Handler for generate_angular_module tool.
- */
 export declare function moduleHandler(args: {
     moduleName: string;
     components: Array<{
@@ -80,9 +69,6 @@ export declare function moduleHandler(args: {
         text: string;
     }[];
 }>;
-/**
- * Creates and returns a configured McpServer with all three tools registered.
- */
 export declare function createServer(): McpServer;
 export declare function startServer(): Promise<void>;
 //# sourceMappingURL=server.d.ts.map

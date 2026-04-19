@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "cls-front-migrate": {
+      "url": "http://localhost:3100/mcp"
+    }
+  }
+}

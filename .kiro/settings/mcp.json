@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "cls-front-migrate": {
+      "url": "http://localhost:3100/mcp",
+      "disabled": false,
+      "autoApprove": [
+        "analyze_react_component",
+        "map_to_angular_standalone",
+        "inject_cls_theme",
+        "generate_api_services",
+        "inject_primeng_ui",
+        "convert_react_to_angular",
+        "generate_microfrontend_shell",
+        "generate_angular_module",
+        "validate_pipeline_config"
+      ]
+    }
+  }
+}

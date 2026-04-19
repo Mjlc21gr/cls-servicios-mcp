@@ -3,17 +3,12 @@ import {
   AngularArtifact,
   ServiceFile,
   SecurityWarning,
-  SignalDefinition,
-  StateDefinition,
 } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Naming convention helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Convert a PascalCase component name to kebab-case for file names.
- */
 function toKebabCase(name: string): string {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
@@ -21,37 +16,36 @@ function toKebabCase(name: string): string {
     .toLowerCase();
 }
 
-/**
- * Ensure a class name is PascalCase.
- */
 function toPascalCase(name: string): string {
   if (!name) return name;
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/**
- * Ensure a method/property name is camelCase.
- */
 function toCamelCase(name: string): string {
   if (!name) return name;
   return name.charAt(0).toLowerCase() + name.slice(1);
 }
 
 // ---------------------------------------------------------------------------
-// Signal-aware expression rewriting
+// SAFE method body rewriting — NO bare variable replacement
 // ---------------------------------------------------------------------------
 
 /**
- * Rewrite a JavaScript/TypeScript code body (method body, effect body, computed)
- * to use Angular signal syntax.
+ * Perform SAFE-ONLY replacements on a method/effect/computed body.
  *
- * - `setCount(prev => prev + 1)` → `this.count.update((prev) => prev + 1)`
- * - `setCount(value)` → `this.count.set(value)`
- * - bare `count` reads → `this.count()`
- * - `React.FormEvent` → `Event`
- * - `inputRef.current` → `this.inputRef()?.nativeElement`
+ * What we DO:
+ *   - Replace setter calls: setXxx( → this.xxx.set(
+ *     (safe because setter names like "setCount" are unique function names)
+ *   - Replace updater calls: setXxx(prev => ...) → this.xxx.update((prev) => ...)
+ *   - Replace React.FormEvent → Event (safe string replacement)
+ *   - Replace ref.current → this.ref()?.nativeElement (safe property access)
+ *
+ * What we DO NOT do:
+ *   - Replace bare variable reads (count → this.count())
+ *     This is what CORRUPTED object literals like { fallido: fallido === 'si' }
+ *     Signal reads are handled by signal-fixer and class-context-layer in post-processing.
  */
-function rewriteCodeBody(body: string, ir: ComponentIR): string {
+function safeRewriteBody(body: string, ir: ComponentIR): string {
   if (ir.state.length === 0 && ir.refs.length === 0) return body;
   let result = body;
 
@@ -72,15 +66,7 @@ function rewriteCodeBody(body: string, ir: ComponentIR): string {
     );
   }
 
-  // 3. Rewrite state variable reads: count → this.count()
-  for (const s of ir.state) {
-    result = result.replace(
-      new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.=])`, 'g'),
-      `this.${s.variableName}()`,
-    );
-  }
-
-  // 4. Rewrite DOM ref access: inputRef.current → this.inputRef()?.nativeElement
+  // 3. Rewrite DOM ref access: inputRef.current → this.inputRef()?.nativeElement
   for (const r of ir.refs) {
     if (r.isDomRef) {
       result = result.replace(
@@ -90,128 +76,102 @@ function rewriteCodeBody(body: string, ir: ComponentIR): string {
     }
   }
 
-  // 5. Replace React types with Angular equivalents
+  // 4. Replace React types with Angular equivalents
   result = result.replace(/React\.FormEvent/g, 'Event');
   result = result.replace(/React\.ChangeEvent<[^>]*>/g, 'Event');
   result = result.replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent');
+  result = result.replace(/FormEvent<[^>]*>/g, 'Event');
 
   return result;
 }
 
-/**
- * Rewrite an event handler expression from the template.
- * Handles patterns like:
- * - `(e) => setNewTitle(e.target.value)` → `newTitle.set($event.target.value)`
- * - `() => toggleTask(task.id)` → `toggleTask(task.id)`
- * - `() => setCount(count + 1)` → `count.set(count() + 1)`
- * - `handleSubmit` → `handleSubmit($event)`
- */
-function rewriteTemplateEventHandler(expr: string, ir: ComponentIR): string {
-  let result = expr;
-
-  // Strip outer arrow: (e) => body or () => body → body
-  // Match: (params) => body  or  () => body
-  const arrowMatch = result.match(/^\s*\(?([^)]*)\)?\s*=>\s*([\s\S]+)$/);
-  if (arrowMatch) {
-    const params = arrowMatch[1].trim();
-    let body = arrowMatch[2].trim();
-
-    // Replace the event parameter (e, event, evt) with $event
-    if (params && params !== '') {
-      const paramName = params.split(/[,:]/)[0].trim();
-      body = body.replace(new RegExp(`\\b${paramName}\\b`, 'g'), '$event');
-    }
-
-    result = body;
-  }
-
-  // Rewrite setter calls with updater: setX(prev => ...) → x.update(...)
-  for (const s of ir.state) {
-    const updaterPattern = new RegExp(
-      `\\b${s.setterName}\\(\\s*\\(?\\s*(\\w+)\\s*\\)?\\s*=>`,
-      'g',
-    );
-    result = result.replace(updaterPattern, `${s.variableName}.update(($1) =>`);
-  }
-
-  // Rewrite setter calls with direct value: setX(expr) → x.set(expr)
-  for (const s of ir.state) {
-    result = result.replace(
-      new RegExp(`\\b${s.setterName}\\(`, 'g'),
-      `${s.variableName}.set(`,
-    );
-  }
-
-  // Rewrite state variable reads in the expression: count → count()
-  for (const s of ir.state) {
-    result = result.replace(
-      new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.=])`, 'g'),
-      `${s.variableName}()`,
-    );
-  }
-
-  return result;
-}
+// ---------------------------------------------------------------------------
+// SAFE template rewriting — only replace known signal names
+// ---------------------------------------------------------------------------
 
 /**
  * Rewrite the Angular template to use signal reads and proper event handlers.
- * Only rewrites inside attribute values and interpolations, not plain text.
+ *
+ * SAFE approach: We know the exact signal names from ir.angularSignals,
+ * so we only add () to those specific names in specific contexts.
+ *
+ * What we DO:
+ *   - [(ngModel)]="signalName" → [ngModel]="signalName()" (ngModelChange)="signalName.set($event)"
+ *   - In {{ expr }}, add () to known signal names
+ *   - In @if (expr) and @for (item of expr), add () to known signal names
+ *   - In [prop]="expr", add () to known signal names (but NOT [ngModel])
+ *
+ * What we DO NOT do:
+ *   - General regex replacement of variable names in arbitrary positions
  */
 function rewriteTemplate(template: string, ir: ComponentIR): string {
-  if (ir.state.length === 0) return template;
+  const signalNames = new Set(ir.angularSignals.map((s) => s.name));
+  if (signalNames.size === 0) return template;
   let result = template;
 
-  // 1. Rewrite event handler attribute values: (click)="expr" → (click)="rewritten"
-  result = result.replace(
-    /\((click|change|submit|input|focus|blur|keydown|keyup|mouseenter|mouseleave)\)="([^"]*)"/g,
-    (_match, event, expr) => {
-      const rewritten = rewriteTemplateEventHandler(expr, ir);
-      return `(${event})="${rewritten}"`;
-    },
-  );
+  // 0. Convert [(ngModel)]="signalVar" → [ngModel]="signalVar()" (ngModelChange)="signalVar.set($event)"
+  for (const name of signalNames) {
+    result = result.replace(
+      new RegExp(`\\[\\(ngModel\\)\\]="${name}"`, 'g'),
+      `[ngModel]="${name}()" (ngModelChange)="${name}.set($event)"`,
+    );
+  }
 
-  // 2. Rewrite interpolations: {{ expr }} → {{ expr() }} for signal reads
+  // 1. Rewrite interpolations: {{ expr }} — add () to signal names
   result = result.replace(
     /\{\{\s*([^}]+)\s*\}\}/g,
     (_match, expr) => {
       let rewritten = expr.trim();
-      for (const s of ir.state) {
+      for (const name of signalNames) {
         rewritten = rewritten.replace(
-          new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.])`, 'g'),
-          `${s.variableName}()`,
+          new RegExp(`(?<!\\.)\\b${name}\\b(?!\\s*[(.])`, 'g'),
+          `${name}()`,
         );
       }
       return `{{ ${rewritten} }}`;
     },
   );
 
-  // 3. Rewrite property bindings: [value]="expr" → [value]="expr()" for signals
-  result = result.replace(
-    /\[(\w+)\]="([^"]*)"/g,
-    (_match, prop, expr) => {
-      let rewritten = expr;
-      for (const s of ir.state) {
-        rewritten = rewritten.replace(
-          new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.])`, 'g'),
-          `${s.variableName}()`,
-        );
-      }
-      return `[${prop}]="${rewritten}"`;
-    },
-  );
-
-  // 4. Rewrite @if conditions for signal reads
+  // 2. Rewrite @if conditions — add () to signal names
   result = result.replace(
     /@if\s*\(([^)]+)\)/g,
     (_match, condition) => {
       let rewritten = condition;
-      for (const s of ir.state) {
+      for (const name of signalNames) {
         rewritten = rewritten.replace(
-          new RegExp(`(?<!\\.)\\b${s.variableName}\\b(?!\\s*[(.])`, 'g'),
-          `${s.variableName}()`,
+          new RegExp(`(?<!\\.)\\b${name}\\b(?!\\s*[(.])`, 'g'),
+          `${name}()`,
         );
       }
       return `@if (${rewritten})`;
+    },
+  );
+
+  // 3. Rewrite @for signal reads
+  result = result.replace(
+    /@for\s*\((\w+)\s+of\s+(\w+)/g,
+    (_match, item, collection) => {
+      if (signalNames.has(collection)) {
+        return `@for (${item} of ${collection}()`;
+      }
+      return _match;
+    },
+  );
+
+  // 4. Rewrite property bindings: [prop]="expr" — add () to signal names
+  //    But NOT [ngModel] which is already handled above
+  result = result.replace(
+    /\[(\w+)\]="([^"]*)"/g,
+    (_match, prop, expr) => {
+      if (prop === 'ngModel') return _match;
+      let rewritten = expr;
+      for (const name of signalNames) {
+        rewritten = rewritten.replace(
+          new RegExp(`(?<!\\.)\\b${name}\\b(?!\\s*[(.])`, 'g'),
+          `${name}()`,
+        );
+      }
+      return `[${prop}]="${rewritten}"`;
     },
   );
 
@@ -219,13 +179,16 @@ function rewriteTemplate(template: string, ir: ComponentIR): string {
 }
 
 // ---------------------------------------------------------------------------
-// Component file generation
+// Component file generation — purely from IR fields
 // ---------------------------------------------------------------------------
 
 function generateComponentFile(ir: ComponentIR): string {
   const lines: string[] = [];
   const className = toPascalCase(ir.componentName);
   const kebabName = toKebabCase(ir.componentName);
+
+  // ── Deduplicate: collect names that are already signals to avoid duplicate methods ──
+  const signalNames = new Set(ir.angularSignals.map(s => s.name));
 
   // Collect Angular core imports
   const coreImports = new Set<string>(['Component']);
@@ -239,7 +202,7 @@ function generateComponentFile(ir: ComponentIR): string {
 
   // Check if DomSanitizer is needed
   const needsSanitizer = ir.securityWarnings.some(
-    (w) => w.pattern === 'dangerouslySetInnerHTML'
+    (w) => w.pattern === 'dangerouslySetInnerHTML',
   );
   if (needsSanitizer) {
     coreImports.add('inject');
@@ -247,6 +210,15 @@ function generateComponentFile(ir: ComponentIR): string {
 
   // Angular core import line
   lines.push(`import { ${[...coreImports].join(', ')} } from '@angular/core';`);
+
+  // FormsModule import (for ngModel with signals)
+  const templateNeedsForms = ir.angularTemplate.includes('ngModel') ||
+    ir.angularTemplate.includes('pInputText') ||
+    ir.angularTemplate.includes('p-select') ||
+    ir.angularTemplate.includes('p-dropdown');
+  if (templateNeedsForms) {
+    lines.push(`import { FormsModule } from '@angular/forms';`);
+  }
 
   // DomSanitizer import
   if (needsSanitizer) {
@@ -258,15 +230,23 @@ function generateComponentFile(ir: ComponentIR): string {
     lines.push(`import { ${imp.moduleName} } from '${imp.importPath}';`);
   }
 
-  // Service imports
+  // Service imports — use correct relative path (services are at ../services/)
   for (const svc of ir.angularServices) {
-    lines.push(`import { ${svc.serviceName} } from './${svc.fileName}';`);
+    lines.push(`import { ${svc.serviceName} } from '../services/${svc.fileName}';`);
   }
 
   lines.push('');
 
   // @Component decorator
   const componentImports = ir.primeNgImports.map((i) => i.moduleName);
+  const needsForms = ir.angularTemplate.includes('ngModel') ||
+    ir.angularTemplate.includes('pInputText') ||
+    ir.angularTemplate.includes('p-dropdown') ||
+    ir.angularTemplate.includes('p-select') ||
+    ir.angularTemplate.includes('p-checkbox');
+  if (needsForms) {
+    componentImports.unshift('FormsModule');
+  }
   const importsStr = componentImports.length > 0
     ? `\n  imports: [${componentImports.join(', ')}],`
     : '';
@@ -281,6 +261,7 @@ function generateComponentFile(ir: ComponentIR): string {
     lines.push(`  templateUrl: './${kebabName}.component.html',`);
   }
 
+  lines.push(`  styleUrls: ['./${kebabName}.component.scss'],`);
   lines.push('})');
 
   // Class declaration
@@ -296,46 +277,50 @@ function generateComponentFile(ir: ComponentIR): string {
   // @Input() for props
   for (const prop of ir.props) {
     const defaultStr = prop.defaultValue ? ` = ${prop.defaultValue}` : prop.isRequired ? '!' : ' = undefined';
-    lines.push(`  @Input() ${toCamelCase(prop.name)}: ${prop.type}${defaultStr};`);
+    // Fix: ensure the ! is a definite assignment assertion, not appended to the type
+    const propType = prop.type.replace(/!$/, '');
+    const suffix = prop.isRequired && !prop.defaultValue ? '!' : '';
+    const initStr = prop.defaultValue ? ` = ${prop.defaultValue}` : '';
+    lines.push(`  @Input() ${toCamelCase(prop.name)}${suffix}: ${propType}${initStr};`);
   }
   if (ir.props.length > 0) lines.push('');
 
-  // Signals — Convertido de useState → signal()
+  // Signals
   for (const sig of ir.angularSignals) {
     lines.push(`  // Convertido de useState → signal()`);
     lines.push(`  ${toCamelCase(sig.name)} = signal<${sig.type}>(${sig.initialValue});`);
   }
   if (ir.angularSignals.length > 0) lines.push('');
 
-  // Computed — Convertido de useMemo → computed()
+  // Computed
   for (const comp of ir.angularComputed) {
     lines.push(`  // Convertido de useMemo → computed()`);
     lines.push(`  ${toCamelCase(comp.name)} = computed(() => ${comp.computeFunction});`);
   }
   if (ir.angularComputed.length > 0) lines.push('');
 
-  // Injections — Convertido de useContext → inject()
+  // Injections
   for (const inj of ir.angularInjections) {
     lines.push(`  // Convertido de useContext → inject()`);
     lines.push(`  ${toCamelCase(inj.propertyName)} = inject(${inj.serviceName});`);
   }
   if (ir.angularInjections.length > 0) lines.push('');
 
-  // ViewChildren — Convertido de useRef (DOM) → viewChild()
+  // ViewChildren
   for (const vc of ir.angularViewChildren) {
     lines.push(`  // Convertido de useRef → viewChild()`);
     lines.push(`  ${toCamelCase(vc.propertyName)} = viewChild<ElementRef>('${vc.selector}');`);
   }
   if (ir.angularViewChildren.length > 0) lines.push('');
 
-  // Class properties — Convertido de useRef (value) → class property
+  // Class properties
   for (const cp of ir.classProperties) {
     lines.push(`  // Convertido de useRef → class property`);
     lines.push(`  ${toCamelCase(cp.name)}: ${cp.type} = ${cp.initialValue};`);
   }
   if (ir.classProperties.length > 0) lines.push('');
 
-  // Constructor with effects — Convertido de useEffect → effect()
+  // Constructor with effects
   if (ir.angularEffects.length > 0) {
     lines.push('  constructor() {');
     for (const eff of ir.angularEffects) {
@@ -359,12 +344,37 @@ function generateComponentFile(ir: ComponentIR): string {
     lines.push('');
   }
 
-  // Component methods — Convertido de useCallback → method
+  // Component methods — with SAFE body rewriting
+  // ── Deduplicate: skip methods whose name collides with a signal ──
   for (const method of ir.componentMethods) {
-    const params = method.parameters.map((p) => `${p.name}: ${p.type}`).join(', ');
+    const methodCamel = toCamelCase(method.name);
+    if (signalNames.has(methodCamel) || signalNames.has(method.name)) {
+      // Already declared as a signal — skip to avoid TS2300 duplicate identifier
+      continue;
+    }
+    const safeParams = method.parameters.map((p) => {
+      let safeType = p.type
+        .replace(/React\.FormEvent/g, 'Event')
+        .replace(/React\.ChangeEvent<[^>]*>/g, 'Event')
+        .replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent')
+        .replace(/FormEvent<[^>]*>/g, 'Event')
+        .replace(/ChangeEvent<[^>]*>/g, 'Event');
+      // Fix: Event<HTMLFormElement> is not valid TS — use plain Event
+      safeType = safeType.replace(/Event<[^>]*>/g, 'Event');
+      return `${p.name}: ${safeType}`;
+    }).join(', ');
+    const safeBody = safeRewriteBody(method.body, ir);
+    // Fix return type: Event<X> → Event, unknown → void for void-like methods
+    let returnType = method.returnType
+      .replace(/Event<[^>]*>/g, 'Event');
     lines.push(`  // Convertido de useCallback → method`);
-    lines.push(`  ${toCamelCase(method.name)}(${params}): ${method.returnType} {`);
-    lines.push(`    ${method.body}`);
+    const asyncPrefix = safeBody.includes('await ') ? 'async ' : '';
+    if (asyncPrefix && !returnType.startsWith('Promise')) {
+      returnType = `Promise<void>`;
+    }
+    if (returnType === 'unknown') returnType = 'void';
+    lines.push(`  ${asyncPrefix}${methodCamel}(${safeParams}): ${returnType} {`);
+    lines.push(`    ${safeBody}`);
     lines.push(`  }`);
     lines.push('');
   }
@@ -401,19 +411,17 @@ function generateSpecFile(ir: ComponentIR): string {
   lines.push(`  });`);
   lines.push('');
 
-  // Test: should create the component
   lines.push(`  it('should create the component', () => {`);
   lines.push(`    expect(component).toBeTruthy();`);
   lines.push(`  });`);
   lines.push('');
 
-  // Test: should render the template
   lines.push(`  it('should render the template', () => {`);
   lines.push(`    const compiled = fixture.nativeElement as HTMLElement;`);
   lines.push(`    expect(compiled).toBeTruthy();`);
   lines.push(`  });`);
 
-  // Test: signal reactivity (if signals exist)
+  // Signal reactivity test
   if (ir.angularSignals.length > 0) {
     const sig = ir.angularSignals[0];
     lines.push('');
@@ -424,7 +432,7 @@ function generateSpecFile(ir: ComponentIR): string {
     lines.push(`  });`);
   }
 
-  // Test: event handling (if event handlers exist)
+  // Event handling test
   const eventBindings = ir.templateBindings.filter((b) => b.type === 'event');
   if (eventBindings.length > 0) {
     const firstEvent = eventBindings[0];
@@ -471,7 +479,7 @@ function generateTailwindConfig(ir: ComponentIR): string {
 }
 
 // ---------------------------------------------------------------------------
-// Service file generation
+// Service file generation — SAFE replacements only
 // ---------------------------------------------------------------------------
 
 function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
@@ -485,10 +493,12 @@ function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
     lines.push(`export class ${toPascalCase(svc.serviceName)} {`);
 
     for (const method of svc.methods) {
-      const params = method.parameters.map((p) => `${p.name}: ${p.type}`).join(', ');
+      const params = method.parameters.map((p) => `${p.name}: ${p.type.replace(/\bany\b/g, 'unknown')}`).join(', ');
+      const returnType = method.returnType.replace(/\bany\b/g, 'unknown');
+      const cleanedBody = cleanServiceBody(method.body);
       lines.push(`  // Convertido de custom hook → service method`);
-      lines.push(`  ${toCamelCase(method.name)}(${params}): ${method.returnType} {`);
-      lines.push(`    ${method.body}`);
+      lines.push(`  ${toCamelCase(method.name)}(${params}): ${returnType} {`);
+      lines.push(`    ${cleanedBody}`);
       lines.push(`  }`);
     }
 
@@ -501,6 +511,193 @@ function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
   });
 }
 
+/**
+ * Clean React residuals from service method bodies.
+ * Replace `: any` → `: unknown`, useXxx() → TODO, toast.xxx() → TODO
+ */
+function cleanServiceBody(content: string): string {
+  let result = content;
+
+  // Replace useXxx() hook calls → comment
+  result = result.replace(/\b(const|let|var)\s+\w+\s*=\s*use[A-Z]\w*\([^)]*\);?/g, '// TODO: inject service');
+
+  // Replace toast calls → comment
+  result = result.replace(/\btoast\.(success|error|warning|info)\([^)]*\);?/g, '// TODO: use MessageService');
+  result = result.replace(/\btoast\([^)]*\);?/g, '// TODO: use MessageService');
+
+  // Remove React. prefixes
+  result = result.replace(/\bReact\./g, '');
+
+  // Replace `: any` with `: unknown`
+  result = result.replace(/:\s*any\b/g, ': unknown');
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// SCSS file generation
+// ---------------------------------------------------------------------------
+
+function generateScssFile(ir: ComponentIR): string {
+  const lines: string[] = [];
+
+  lines.push(`// ${ir.componentName} - Estilos del componente`);
+  lines.push(`// Generado por CLS Front-End Migration MCP`);
+  lines.push(`// Angular 20 + PrimeNG 19 + Design System Seguros Bolívar`);
+  lines.push('');
+  lines.push(':host {');
+  lines.push('  display: block;');
+  lines.push("  font-family: var(--sb-font-family, 'Montserrat', 'Segoe UI', system-ui, sans-serif);");
+  lines.push('}');
+  lines.push('');
+
+  const template = ir.angularTemplate;
+
+  // Detect forms
+  if (/ngModel|pInputText|p-select|p-dropdown|p-checkbox|pTextarea|<form/i.test(template)) {
+    lines.push('// Estilos de formulario');
+    lines.push('.p-field, .field {');
+    lines.push('  margin-bottom: var(--sb-spacing-md, 16px);');
+    lines.push('}');
+    lines.push('');
+    lines.push('label {');
+    lines.push('  display: block;');
+    lines.push('  color: var(--sb-text-secondary, #5A6275);');
+    lines.push('  font-weight: 500;');
+    lines.push('  margin-bottom: var(--sb-spacing-xs, 4px);');
+    lines.push('  font-size: var(--sb-font-size-sm, 0.875rem);');
+    lines.push('}');
+    lines.push('');
+  }
+
+  // Detect tables
+  if (/p-table/i.test(template)) {
+    lines.push('// Estilos de tabla');
+    lines.push('::ng-deep .p-datatable {');
+    lines.push('  .p-datatable-thead > tr > th {');
+    lines.push('    background-color: var(--sb-primary-50, #E6EAF0);');
+    lines.push('    color: var(--sb-primary-dark, #002D7A);');
+    lines.push('    font-weight: 600;');
+    lines.push('  }');
+    lines.push('}');
+    lines.push('');
+  }
+
+  // Detect cards
+  if (/p-card/i.test(template)) {
+    lines.push('// Estilos de card');
+    lines.push('::ng-deep .p-card {');
+    lines.push('  border-radius: var(--sb-border-radius-lg, 12px);');
+    lines.push('  box-shadow: var(--sb-shadow, 0 2px 4px rgba(0, 32, 91, 0.08));');
+    lines.push('}');
+    lines.push('');
+  }
+
+  // Detect buttons
+  if (/p-button/i.test(template)) {
+    lines.push('// Estilos de botones');
+    lines.push('::ng-deep .p-button {');
+    lines.push('  border-radius: var(--sb-border-radius, 8px);');
+    lines.push('  font-family: var(--sb-font-family);');
+    lines.push('  transition: all var(--sb-transition-base, 250ms ease-in-out);');
+    lines.push('}');
+    lines.push('');
+  }
+
+  // Detect dialogs
+  if (/p-dialog/i.test(template)) {
+    lines.push('// Estilos de diálogo');
+    lines.push('::ng-deep .p-dialog {');
+    lines.push('  border-radius: var(--sb-border-radius-lg, 12px);');
+    lines.push("  .p-dialog-header {");
+    lines.push('    background-color: var(--sb-primary, #003DA5);');
+    lines.push('    color: var(--sb-white, #FFFFFF);');
+    lines.push('  }');
+    lines.push('}');
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Clean component file — remove duplicate classes, truncate after class end
+// ---------------------------------------------------------------------------
+
+function cleanComponentFile(content: string): string {
+  let result = content;
+
+  // Remove duplicate `export class` declarations (keep only the first)
+  const exportClassMatches = [...result.matchAll(/^export class \w+Component \{/gm)];
+  if (exportClassMatches.length > 1) {
+    const secondIdx = exportClassMatches[1].index!;
+    result = result.slice(0, secondIdx).trimEnd() + '\n';
+  }
+
+  // Find the last `}` that closes the class and truncate after it
+  const lines = result.split('\n');
+  let lastClosingBraceIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim() === '}') {
+      lastClosingBraceIdx = i;
+      break;
+    }
+  }
+  if (lastClosingBraceIdx !== -1 && lastClosingBraceIdx < lines.length - 1) {
+    const afterContent = lines.slice(lastClosingBraceIdx + 1).join('\n').trim();
+    if (afterContent.length > 0) {
+      result = lines.slice(0, lastClosingBraceIdx + 1).join('\n') + '\n';
+    }
+  }
+
+  // Replace `: any` → `: unknown`
+  result = result.replace(/:\s*any\b/g, ': unknown');
+  result = result.replace(/<any>/g, '<unknown>');
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Clean React residuals — SAFE removals only
+// ---------------------------------------------------------------------------
+
+function cleanReactResiduals(content: string): string {
+  let result = content;
+
+  // Remove `import ... from 'react'` lines
+  result = result.replace(/^import\s+.*from\s+['"]react['"];?\s*$/gm, '');
+
+  // Remove React. prefixes
+  result = result.replace(/\bReact\./g, '');
+
+  // Remove toast calls → comment
+  result = result.replace(/\btoast\.(success|error|warning|info)\([^)]*\);?/g, '// TODO: implement notification');
+  result = result.replace(/\btoast\([^)]*\);?/g, '// TODO: implement notification');
+
+  // Remove useXxx() hook calls → comment
+  result = result.replace(/\b(const|let|var)\s+\w+\s*=\s*use[A-Z]\w*\([^)]*\);?/g, '// TODO: inject service');
+
+  // Replace `: any` with `: unknown`
+  result = result.replace(/:\s*any\b/g, ': unknown');
+  result = result.replace(/<any>/g, '<unknown>');
+
+  // Remove imports from shadcn/ui, lucide-react, sonner, motion, @/components
+  result = result.replace(/^import\s+.*from\s+['"]@\/components\/.*['"];?\s*$/gm, '');
+  result = result.replace(/^import\s+.*from\s+['"]lucide-react['"];?\s*$/gm, '');
+  result = result.replace(/^import\s+.*from\s+['"]sonner['"];?\s*$/gm, '');
+  result = result.replace(/^import\s+.*from\s+['"]motion\/react['"];?\s*$/gm, '');
+  result = result.replace(/^import\s+.*from\s+['"]framer-motion['"];?\s*$/gm, '');
+
+  // Clean React type annotations
+  result = result.replace(/React\.FormEvent<[^>]*>/g, 'Event');
+  result = result.replace(/React\.ChangeEvent<[^>]*>/g, 'Event');
+  result = result.replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent');
+  result = result.replace(/FormEvent<[^>]*>/g, 'Event');
+  result = result.replace(/ChangeEvent<[^>]*>/g, 'Event');
+
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -511,43 +708,38 @@ function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
  * Takes a ComponentIR that has been processed through the full pipeline
  * (AST_Parser → State_Mapper → Template_Generator → PrimeNG_Mapper) and
  * produces string content for each output file.
+ *
+ * KEY DESIGN: Method bodies are rewritten with SAFE-ONLY replacements:
+ *   - Setter calls (setXxx → this.xxx.set) — safe because setter names are unique
+ *   - React types (React.FormEvent → Event) — safe string replacement
+ *   - Ref access (ref.current → this.ref()?.nativeElement) — safe property access
+ *
+ * Bare variable reads are NOT replaced here. They are handled by:
+ *   - signal-fixer (for template signal reads)
+ *   - class-context-layer (for this. prefix in method bodies)
  */
 export function emitAngularArtifact(ir: ComponentIR): AngularArtifact {
-  // Rewrite template to use Angular signal syntax for event handlers and interpolations
+  // Rewrite template to use Angular signal syntax
   const rewrittenTemplate = rewriteTemplate(ir.angularTemplate, ir);
 
-  // Rewrite method bodies to use this.signal() and this.signal.set/update
-  const rewrittenMethods = ir.componentMethods.map((m) => ({
-    ...m,
-    body: rewriteCodeBody(m.body, ir),
-    // Replace React types in parameters
-    parameters: m.parameters.map((p) => ({
-      ...p,
-      type: p.type.replace(/React\.FormEvent/g, 'Event')
-                   .replace(/React\.ChangeEvent<[^>]*>/g, 'Event')
-                   .replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent'),
-    })),
-  }));
-
-  // Rewrite effect bodies
+  // Rewrite effect bodies with SAFE replacements only
   const rewrittenEffects = ir.angularEffects.map((e) => ({
     ...e,
-    body: rewriteCodeBody(e.body, ir),
+    body: safeRewriteBody(e.body, ir),
     cleanupFunction: e.cleanupFunction
-      ? rewriteCodeBody(e.cleanupFunction, ir)
+      ? safeRewriteBody(e.cleanupFunction, ir)
       : undefined,
   }));
 
-  // Rewrite computed function bodies
+  // Rewrite computed function bodies with SAFE replacements only
   const rewrittenComputed = ir.angularComputed.map((c) => ({
     ...c,
-    computeFunction: rewriteCodeBody(c.computeFunction, ir),
+    computeFunction: safeRewriteBody(c.computeFunction, ir),
   }));
 
   const rewrittenIR: ComponentIR = {
     ...ir,
     angularTemplate: rewrittenTemplate,
-    componentMethods: rewrittenMethods,
     angularEffects: rewrittenEffects,
     angularComputed: rewrittenComputed,
   };
@@ -556,6 +748,10 @@ export function emitAngularArtifact(ir: ComponentIR): AngularArtifact {
   const specFile = generateSpecFile(rewrittenIR);
   const tailwindConfig = generateTailwindConfig(rewrittenIR);
   const services = generateServiceFiles(rewrittenIR);
+  const scssFile = generateScssFile(rewrittenIR);
+
+  // Clean up the component file
+  const cleanedComponentFile = cleanReactResiduals(cleanComponentFile(componentFile));
 
   // Generate separate template file when not inline
   const templateFile = rewrittenIR.isInlineTemplate ? undefined : rewrittenIR.angularTemplate;
@@ -564,10 +760,11 @@ export function emitAngularArtifact(ir: ComponentIR): AngularArtifact {
   const securityWarnings: SecurityWarning[] = [...ir.securityWarnings];
 
   return {
-    componentFile,
+    componentFile: cleanedComponentFile,
     specFile,
     tailwindConfig,
     templateFile,
+    scssFile,
     services,
     securityWarnings,
   };

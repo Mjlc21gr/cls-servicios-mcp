@@ -183,6 +183,13 @@ export function mapToPrimeNG(ir: ComponentIR): ComponentIR {
   template = replaceTextarea(template);
   template = replaceDialog(template);
 
+  // Limpiar atributos HTML no soportados por PrimeNG
+  const primeNgTags = ['p-dropdown', 'p-checkbox', 'p-dialog', 'p-table'];
+  for (const tag of primeNgTags) {
+    template = template.replace(new RegExp(`(<${tag}[^>]*)\\s+required(?=[\\s/>])`, 'g'), '$1');
+    template = template.replace(new RegExp(`(<${tag}[^>]*)\\s+required=["'][^"']*["']`, 'g'), '$1');
+  }
+
   const primeNgImports = detectPrimeNGImports(template);
 
   return {

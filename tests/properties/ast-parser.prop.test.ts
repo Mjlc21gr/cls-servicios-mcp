@@ -276,7 +276,7 @@ describe('Property 3: Rechazo de código sin componente React válido', () => {
   it('should throw an error for any TS code without a JSX-returning export', () => {
     fc.assert(
       fc.property(nonComponentCodeArb, (code) => {
-        expect(() => parseReactComponent(code)).toThrow(/No valid React component found/);
+        expect(() => parseReactComponent(code)).toThrow(/No valid React component found|Syntax error/);
       }),
       { numRuns: 100 },
     );

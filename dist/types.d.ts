@@ -211,6 +211,7 @@ export interface AngularArtifact {
     specFile: string;
     tailwindConfig: string;
     templateFile?: string;
+    scssFile: string;
     services: ServiceFile[];
     securityWarnings: SecurityWarning[];
 }

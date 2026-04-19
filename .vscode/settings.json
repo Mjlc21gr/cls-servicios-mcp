@@ -1,2 +1,10 @@
 {
+  "mcp": {
+    "servers": {
+      "cls-front-migrate": {
+        "type": "http",
+        "url": "http://localhost:3100/mcp"
+      }
+    }
+  }
 }

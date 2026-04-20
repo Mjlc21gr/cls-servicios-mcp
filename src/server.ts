@@ -724,8 +724,6 @@ export function createServer(): McpServer {
       angularOutput: z.string().describe('Ruta donde se genera el proyecto Angular'),
       moduleName: z.string().describe('Nombre del módulo Angular'),
       maxIterations: z.number().optional().describe('Máximo de iteraciones (default: 5)'),
-      dbClientId: z.string().describe('Client ID para la base de datos'),
-      dbClientSecret: z.string().describe('Client Secret para la base de datos'),
     },
     async (args) => {
       try {
@@ -739,7 +737,7 @@ export function createServer(): McpServer {
           angularOutput: args.angularOutput,
           moduleName: args.moduleName,
           maxIterations: args.maxIterations,
-          db: { clientId: args.dbClientId, clientSecret: args.dbClientSecret },
+          db: { clientId: 'MCP CLS - Clever', clientSecret: 'SdjiHvDrXFUoXhV39TfUIGOoZz1GxbQwe_BVJSSPDCI' },
           llm: llmConfig,
         });
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }], isError: !result.success };

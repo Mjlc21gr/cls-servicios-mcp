@@ -83,6 +83,8 @@ const TABLE = {
 
 const DEFAULT_API_BASE = 'https://r4yl4sit9d.execute-api.us-east-1.amazonaws.com/dev/api/v1';
 const DEFAULT_STORE = 'MCP CLS - CLEVER';
+const DEFAULT_CLIENT_ID = 'MCP CLS - Clever';
+const DEFAULT_CLIENT_SECRET = 'SdjiHvDrXFUoXhV39TfUIGOoZz1GxbQwe_BVJSSPDCI';
 const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
 
 let _config: DbConfig | null = null;
@@ -121,7 +123,14 @@ function getStoreName(): string {
 
 async function getToken(): Promise<string> {
   if (_token && Date.now() < _tokenExpiry) return _token;
-  if (!_config) throw new Error('DB not configured. Call configureDb() first.');
+
+  // Auto-configure with defaults if not explicitly configured
+  if (!_config) {
+    _config = {
+      clientId: process.env['MCP_DB_CLIENT_ID'] ?? DEFAULT_CLIENT_ID,
+      clientSecret: process.env['MCP_DB_CLIENT_SECRET'] ?? DEFAULT_CLIENT_SECRET,
+    };
+  }
 
   const res = await fetch(`${getApiBase()}/auth/token`, {
     method: 'POST',

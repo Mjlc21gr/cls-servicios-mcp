@@ -1,20 +1,53 @@
 import { ComponentIR, PrimeNGImport } from '../types.js';
 
 // ---------------------------------------------------------------------------
-// PrimeNG Mapping Tables
+// PrimeNG 21 Mapping Tables (Standalone Components — no modules)
 // ---------------------------------------------------------------------------
 
 /**
- * Maps PrimeNG component/directive tags to their module imports.
+ * Maps PrimeNG component/directive tags to their standalone imports.
+ * PrimeNG 21 uses standalone components directly, not NgModules.
  */
 const PRIMENG_IMPORT_MAP: Record<string, PrimeNGImport> = {
-  'p-button': { moduleName: 'ButtonModule', importPath: 'primeng/button' },
-  'pInputText': { moduleName: 'InputTextModule', importPath: 'primeng/inputtext' },
-  'p-dropdown': { moduleName: 'DropdownModule', importPath: 'primeng/dropdown' },
-  'p-table': { moduleName: 'TableModule', importPath: 'primeng/table' },
-  'p-checkbox': { moduleName: 'CheckboxModule', importPath: 'primeng/checkbox' },
-  'pInputTextarea': { moduleName: 'InputTextareaModule', importPath: 'primeng/inputtextarea' },
-  'p-dialog': { moduleName: 'DialogModule', importPath: 'primeng/dialog' },
+  'p-button': { moduleName: 'Button', importPath: 'primeng/button' },
+  'pInputText': { moduleName: 'InputText', importPath: 'primeng/inputtext' },
+  'p-select': { moduleName: 'Select', importPath: 'primeng/select' },
+  'p-table': { moduleName: 'Table', importPath: 'primeng/table' },
+  'p-checkbox': { moduleName: 'Checkbox', importPath: 'primeng/checkbox' },
+  'pTextarea': { moduleName: 'Textarea', importPath: 'primeng/textarea' },
+  'p-dialog': { moduleName: 'Dialog', importPath: 'primeng/dialog' },
+  'p-toast': { moduleName: 'Toast', importPath: 'primeng/toast' },
+  'p-tag': { moduleName: 'Tag', importPath: 'primeng/tag' },
+  'p-card': { moduleName: 'Card', importPath: 'primeng/card' },
+  'p-datepicker': { moduleName: 'DatePicker', importPath: 'primeng/datepicker' },
+  'p-inputnumber': { moduleName: 'InputNumber', importPath: 'primeng/inputnumber' },
+  'p-textarea': { moduleName: 'Textarea', importPath: 'primeng/textarea' },
+  'p-progressbar': { moduleName: 'ProgressBar', importPath: 'primeng/progressbar' },
+  'p-accordion': { moduleName: 'Accordion', importPath: 'primeng/accordion' },
+  'p-tabview': { moduleName: 'TabView', importPath: 'primeng/tabview' },
+  'p-menu': { moduleName: 'Menu', importPath: 'primeng/menu' },
+  'p-toolbar': { moduleName: 'Toolbar', importPath: 'primeng/toolbar' },
+  'p-fileupload': { moduleName: 'FileUpload', importPath: 'primeng/fileupload' },
+  'p-confirmdialog': { moduleName: 'ConfirmDialog', importPath: 'primeng/confirmdialog' },
+  'p-tooltip': { moduleName: 'Tooltip', importPath: 'primeng/tooltip' },
+  'p-badge': { moduleName: 'Badge', importPath: 'primeng/badge' },
+  'p-chip': { moduleName: 'Chip', importPath: 'primeng/chip' },
+  'p-avatar': { moduleName: 'Avatar', importPath: 'primeng/avatar' },
+  'p-divider': { moduleName: 'Divider', importPath: 'primeng/divider' },
+  'p-skeleton': { moduleName: 'Skeleton', importPath: 'primeng/skeleton' },
+  'p-panel': { moduleName: 'Panel', importPath: 'primeng/panel' },
+  'p-steps': { moduleName: 'Steps', importPath: 'primeng/steps' },
+  'p-message': { moduleName: 'Message', importPath: 'primeng/message' },
+  'p-autocomplete': { moduleName: 'AutoComplete', importPath: 'primeng/autocomplete' },
+  'p-multiselect': { moduleName: 'MultiSelect', importPath: 'primeng/multiselect' },
+  'p-radiobutton': { moduleName: 'RadioButton', importPath: 'primeng/radiobutton' },
+  'p-toggleswitch': { moduleName: 'ToggleSwitch', importPath: 'primeng/toggleswitch' },
+  'p-rating': { moduleName: 'Rating', importPath: 'primeng/rating' },
+  'p-slider': { moduleName: 'Slider', importPath: 'primeng/slider' },
+  'p-paginator': { moduleName: 'Paginator', importPath: 'primeng/paginator' },
+  'p-image': { moduleName: 'Image', importPath: 'primeng/image' },
+  'p-carousel': { moduleName: 'Carousel', importPath: 'primeng/carousel' },
+  'p-galleria': { moduleName: 'Galleria', importPath: 'primeng/galleria' },
 };
 
 // ---------------------------------------------------------------------------
@@ -66,11 +99,15 @@ function replaceCheckbox(template: string): string {
 }
 
 /**
- * Replace `<select ...>...</select>` with `<p-dropdown ...>...</p-dropdown>`.
+ * Replace `<select ...>...</select>` with `<p-select ...>...</p-select>`.
+ * PrimeNG 21 uses p-select (formerly p-dropdown).
  */
 function replaceSelect(template: string): string {
-  template = template.replace(/<select(\s|>|\/)/g, '<p-dropdown$1');
-  template = template.replace(/<\/select>/g, '</p-dropdown>');
+  template = template.replace(/<select(\s|>|\/)/g, '<p-select$1');
+  template = template.replace(/<\/select>/g, '</p-select>');
+  // Also convert any remaining p-dropdown to p-select (PrimeNG 21 migration)
+  template = template.replace(/<p-dropdown(\s|>|\/)/g, '<p-select$1');
+  template = template.replace(/<\/p-dropdown>/g, '</p-select>');
   return template;
 }
 
@@ -84,12 +121,13 @@ function replaceTable(template: string): string {
 }
 
 /**
- * Replace `<textarea ...>` with `<textarea pInputTextarea ...>`.
+ * Replace `<textarea ...>` with `<textarea pTextarea ...>`.
+ * PrimeNG 21 uses pTextarea (formerly pInputTextarea).
  */
 function replaceTextarea(template: string): string {
   template = template.replace(
-    /<textarea(?!\s[^>]*pInputTextarea)(\s|>)/g,
-    '<textarea pInputTextarea$1',
+    /<textarea(?!\s[^>]*pTextarea)(\s|>)/g,
+    '<textarea pTextarea$1',
   );
   return template;
 }
@@ -110,51 +148,25 @@ function replaceDialog(template: string): string {
 /**
  * Scan the (already-replaced) template and collect the PrimeNG imports
  * needed based on which PrimeNG components/directives are present.
+ * PrimeNG 21: standalone components, no NgModules.
  */
 function detectPrimeNGImports(template: string): PrimeNGImport[] {
   const imports: PrimeNGImport[] = [];
   const seen = new Set<string>();
 
-  // Detect <p-button
-  if (/<p-button[\s>\/]/.test(template) && !seen.has('ButtonModule')) {
-    seen.add('ButtonModule');
-    imports.push(PRIMENG_IMPORT_MAP['p-button']);
-  }
+  for (const [tag, importDef] of Object.entries(PRIMENG_IMPORT_MAP)) {
+    if (seen.has(importDef.moduleName)) continue;
 
-  // Detect pInputText attribute
-  if (/pInputText[\s>\/]/.test(template) && !seen.has('InputTextModule')) {
-    seen.add('InputTextModule');
-    imports.push(PRIMENG_IMPORT_MAP['pInputText']);
-  }
+    // Check if the tag/directive is present in the template
+    const isDirective = tag.startsWith('p') && tag[1] !== '-'; // pInputText, pTextarea, etc.
+    const pattern = isDirective
+      ? new RegExp(`\\b${tag}[\\s>]`)
+      : new RegExp(`<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s>/]`);
 
-  // Detect <p-dropdown
-  if (/<p-dropdown[\s>\/]/.test(template) && !seen.has('DropdownModule')) {
-    seen.add('DropdownModule');
-    imports.push(PRIMENG_IMPORT_MAP['p-dropdown']);
-  }
-
-  // Detect <p-table
-  if (/<p-table[\s>\/]/.test(template) && !seen.has('TableModule')) {
-    seen.add('TableModule');
-    imports.push(PRIMENG_IMPORT_MAP['p-table']);
-  }
-
-  // Detect <p-checkbox
-  if (/<p-checkbox[\s>\/]/.test(template) && !seen.has('CheckboxModule')) {
-    seen.add('CheckboxModule');
-    imports.push(PRIMENG_IMPORT_MAP['p-checkbox']);
-  }
-
-  // Detect pInputTextarea attribute
-  if (/pInputTextarea[\s>\/]/.test(template) && !seen.has('InputTextareaModule')) {
-    seen.add('InputTextareaModule');
-    imports.push(PRIMENG_IMPORT_MAP['pInputTextarea']);
-  }
-
-  // Detect <p-dialog
-  if (/<p-dialog[\s>\/]/.test(template) && !seen.has('DialogModule')) {
-    seen.add('DialogModule');
-    imports.push(PRIMENG_IMPORT_MAP['p-dialog']);
+    if (pattern.test(template)) {
+      seen.add(importDef.moduleName);
+      imports.push(importDef);
+    }
   }
 
   return imports;
@@ -184,7 +196,7 @@ export function mapToPrimeNG(ir: ComponentIR): ComponentIR {
   template = replaceDialog(template);
 
   // Limpiar atributos HTML no soportados por PrimeNG
-  const primeNgTags = ['p-dropdown', 'p-checkbox', 'p-dialog', 'p-table'];
+  const primeNgTags = ['p-select', 'p-checkbox', 'p-dialog', 'p-table'];
   for (const tag of primeNgTags) {
     template = template.replace(new RegExp(`(<${tag}[^>]*)\\s+required(?=[\\s/>])`, 'g'), '$1');
     template = template.replace(new RegExp(`(<${tag}[^>]*)\\s+required=["'][^"']*["']`, 'g'), '$1');

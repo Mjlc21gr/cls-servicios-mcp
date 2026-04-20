@@ -272,6 +272,30 @@ function fixCallbackToOutputBinding(): FixResult { return [false, 'target not fo
 function fixPrimengAutoImport(): FixResult { return [false, 'target not found']; }
 function fixFeatureClassRename(): FixResult { return [false, 'already applied']; }
 
+function fixPostcssConfig(): FixResult {
+  const f = LAYER_FILE['project-scaffolder'];
+  const c = readSource(f);
+
+  // Fix: tailwindcss → @tailwindcss/postcss in postcss.config.js generator
+  if (!c.includes("'tailwindcss': {},")) return [false, 'already applied'];
+
+  writeSource(f, c.replace("'tailwindcss': {},", "'@tailwindcss/postcss': {},"));
+  void logPatch('POSTCSS_CONFIG', f, 'Tailwind v4: use @tailwindcss/postcss plugin');
+  return [true, 'Tailwind v4: use @tailwindcss/postcss plugin'];
+}
+
+function fixStylePreservatorPostcss(): FixResult {
+  const f = 'src/pipeline/style-preservator.ts';
+  let c: string;
+  try { c = readSource(f); } catch { return [false, 'file not found']; }
+
+  if (!c.includes("tailwindcss: {},")) return [false, 'already applied'];
+
+  writeSource(f, c.replace("tailwindcss: {},", "'@tailwindcss/postcss': {},"));
+  void logPatch('POSTCSS_CONFIG', f, 'Tailwind v4: fix style-preservator postcss config');
+  return [true, 'Fix style-preservator postcss config'];
+}
+
 // ─── Fix Registry ────────────────────────────────────────────────────────────
 
 /**
@@ -330,6 +354,13 @@ const ALL_FIXES: Array<[category: string, fixFn: () => FixResult]> = [
 
   // Unknown
   ['unknown', fixFeatureClassRename],
+
+  // PostCSS / Tailwind config
+  ['postcss_config', fixPostcssConfig],
+  ['postcss_config', fixStylePreservatorPostcss],
+
+  // Missing dependencies
+  ['missing_dependency', fixPostcssConfig],
 ];
 
 // ─── Public API ──────────────────────────────────────────────────────────────

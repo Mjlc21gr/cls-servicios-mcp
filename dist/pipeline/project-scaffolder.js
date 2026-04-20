@@ -19,14 +19,11 @@ export function scaffoldProject(moduleName, componentNames, options, projectMeta
     files.set('src/app/app.component.ts', generateAppComponent());
     files.set('src/index.html', generateIndexHtml(moduleName));
     files.set('src/styles.scss', generateStylesScss());
-    // Generate Tailwind config if source project uses Tailwind
-    const hasTailwind = projectMeta?.uiLibraries.includes('Tailwind CSS') ||
-        projectMeta?.uiLibraries.includes('tailwindcss') ||
-        detectedDependencies?.some(d => d.includes('tailwind'));
-    if (hasTailwind) {
-        files.set('tailwind.config.js', generateTailwindConfig());
-        files.set('postcss.config.js', generatePostcssConfig());
-    }
+    // Tailwind v4 — Angular uses .postcssrc.json for PostCSS config
+    files.set('.postcssrc.json', JSON.stringify({ plugins: { '@tailwindcss/postcss': {} } }, null, 2) + '\n');
+    // Tailwind v4 CSS entry point
+    files.set('src/tailwind.css', '@import "tailwindcss";\n');
+    // .postcssrc.json and tailwind.css already handle PostCSS config
     return { files };
 }
 // ---------------------------------------------------------------------------
@@ -42,8 +39,8 @@ function generatePackageJson(moduleName, options, projectMeta, detectedDependenc
         '@angular/platform-browser': '^20.0.0',
         '@angular/platform-browser-dynamic': '^20.0.0',
         '@angular/router': '^20.0.0',
-        primeng: '^19.0.0',
-        '@primeng/themes': '^19.0.0',
+        primeng: '^21.0.0',
+        '@primeng/themes': '^21.0.0',
         primeicons: '^7.0.0',
         rxjs: '^7.8.0',
         tslib: '^2.6.0',
@@ -91,15 +88,11 @@ function generatePackageJson(moduleName, options, projectMeta, detectedDependenc
         dependencies: deps,
         devDependencies: devDeps,
     };
-    // Add Tailwind if the source project uses it (ALWAYS, not just when convertTailwind is false)
-    const hasTailwind = projectMeta?.uiLibraries.includes('Tailwind CSS') ||
-        projectMeta?.uiLibraries.includes('tailwindcss') ||
-        detectedDependencies?.some(d => d.includes('tailwind'));
-    if (hasTailwind) {
-        pkg.devDependencies['tailwindcss'] = '^3.4.0';
-        pkg.devDependencies['autoprefixer'] = '^10.4.0';
-        pkg.devDependencies['postcss'] = '^8.4.0';
-    }
+    // Tailwind CSS v4 is always included in CLS projects
+    pkg.devDependencies['tailwindcss'] = '^4.0.0';
+    pkg.devDependencies['autoprefixer'] = '^10.4.0';
+    pkg.devDependencies['postcss'] = '^8.4.0';
+    pkg.devDependencies['@tailwindcss/postcss'] = '^4.0.0';
     return JSON.stringify(pkg, null, 2) + '\n';
 }
 // ---------------------------------------------------------------------------
@@ -127,9 +120,13 @@ function generateAngularJson(moduleName) {
                             polyfills: ['zone.js'],
                             tsConfig: 'tsconfig.app.json',
                             styles: [
+                                'src/tailwind.css',
                                 'src/styles.scss',
                                 'node_modules/primeicons/primeicons.css',
                             ],
+                            stylePreprocessorOptions: {
+                                includePaths: ['node_modules'],
+                            },
                             scripts: [],
                         },
                         configurations: {
@@ -248,7 +245,13 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes),
     provideHttpClient(),
     provideAnimationsAsync(),
-    providePrimeNG({ theme: { preset: Aura } }),
+    providePrimeNG({
+      theme: {
+        preset: Aura,
+        options: { darkModeSelector: '.dark-mode' },
+      },
+      ripple: true,
+    }),
   ],
 };
 `;
@@ -294,16 +297,29 @@ function generateIndexHtml(moduleName) {
 // src/styles.scss
 // ---------------------------------------------------------------------------
 function generateStylesScss() {
-    return `/* Tailwind CSS */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* PrimeNG 19 uses preset themes via providePrimeNG() in app.config.ts */
-/* Only primeicons CSS is needed as a direct import */
+    return `/* PrimeNG 21 uses preset themes via providePrimeNG() in app.config.ts */
 
 /* Seguros Bolívar Design System theme */
 @use './styles/sb-primeng-theme';
+
+/* Global resets */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--sb-font-family, 'Montserrat', 'Segoe UI', system-ui, sans-serif);
+  font-size: var(--sb-font-size-base, 1rem);
+  color: var(--sb-gray-900, #212529);
+  background-color: var(--sb-white, #ffffff);
+}
+
+:focus-visible {
+  outline: 2px solid var(--sb-primary, #0066cc);
+  outline-offset: 2px;
+}
+
+html { scroll-behavior: smooth; }
 `;
 }
 // ---------------------------------------------------------------------------
@@ -323,7 +339,7 @@ module.exports = {
 function generatePostcssConfig() {
     return `module.exports = {
   plugins: {
-    tailwindcss: {},
+    '@tailwindcss/postcss': {},
     autoprefixer: {},
   },
 };

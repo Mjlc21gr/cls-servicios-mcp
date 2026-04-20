@@ -31,6 +31,27 @@ export interface FullMigrationResult {
   readonly validationReport: readonly ValidationIssue[];
   readonly duration: number;
   readonly errors?: readonly PipelineError[];
+  /** Compilation result after generating the Angular project */
+  readonly compilation?: CompilationResult;
+}
+
+export interface CompilationResult {
+  readonly success: boolean;
+  readonly errorCount: number;
+  readonly errors: readonly CompilationError[];
+  /** Whether errors were saved to the remote API database */
+  readonly savedToDb: boolean;
+  /** Intento ID in the database (for tracking) */
+  readonly intentoId?: number;
+}
+
+export interface CompilationError {
+  readonly code: string;
+  readonly message: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly category?: string;
+  readonly mcpLayer?: string;
 }
 
 export interface MigrationSummary {

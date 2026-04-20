@@ -287,7 +287,7 @@ function generateComponentFile(ir: ComponentIR): string {
   const templateNeedsForms = ir.angularTemplate.includes('ngModel') ||
     ir.angularTemplate.includes('pInputText') ||
     ir.angularTemplate.includes('p-select') ||
-    ir.angularTemplate.includes('p-dropdown');
+    ir.angularTemplate.includes('pTextarea');
   if (templateNeedsForms) {
     lines.push(`import { FormsModule } from '@angular/forms';`);
   }
@@ -314,9 +314,9 @@ function generateComponentFile(ir: ComponentIR): string {
   const componentImports = ir.primeNgImports.map((i) => i.moduleName);
   const needsForms = ir.angularTemplate.includes('ngModel') ||
     ir.angularTemplate.includes('pInputText') ||
-    ir.angularTemplate.includes('p-dropdown') ||
     ir.angularTemplate.includes('p-select') ||
-    ir.angularTemplate.includes('p-checkbox');
+    ir.angularTemplate.includes('p-checkbox') ||
+    ir.angularTemplate.includes('pTextarea');
   if (needsForms) {
     componentImports.unshift('FormsModule');
   }

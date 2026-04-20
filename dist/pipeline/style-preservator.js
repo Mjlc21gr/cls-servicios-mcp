@@ -4,21 +4,29 @@
 /**
  * Analyze the React project's styling approach and generate
  * equivalent Angular styles that preserve the visual identity.
+ *
+ * Handles:
+ * - Plain CSS/SCSS/LESS imports → component SCSS
+ * - CSS Modules → scoped SCSS
+ * - styled-components → extracted SCSS
+ * - emotion css`` → extracted SCSS
+ * - Tailwind classes → preserved in templates (no conversion needed)
+ * - CSS variables → preserved in global :root
+ * - Inline style objects → converted to Tailwind or SCSS
  */
 export function preserveStyles(scannedProject) {
     const styleFiles = scannedProject.styles;
     const uiLibs = scannedProject.projectMeta.uiLibraries;
-    // Detect Tailwind
-    const hasTailwind = uiLibs.includes('Tailwind CSS') ||
-        styleFiles.some(f => f.content.includes('@tailwind') || f.content.includes('tailwindcss'));
+    // Detect Tailwind (always true for CLS projects, but detect from source too)
+    const hasTailwind = true; // CLS standard: always use Tailwind
     // Extract global CSS variables and base styles
     const globalCssVars = extractCssVariables(styleFiles);
     const componentStyleMap = extractComponentStyles(scannedProject);
     // Generate global SCSS
     const globalScss = generateGlobalScss(hasTailwind, globalCssVars);
-    // Generate Tailwind config if needed
-    const tailwindConfig = hasTailwind ? generateTailwindConfig() : null;
-    const postcssConfig = hasTailwind ? generatePostcssConfig() : null;
+    // Always generate Tailwind config
+    const tailwindConfig = generateTailwindConfig();
+    const postcssConfig = generatePostcssConfig();
     return {
         globalScss,
         componentStyles: componentStyleMap,
@@ -70,18 +78,42 @@ function extractComponentStyles(scannedProject) {
         while ((m = moduleImportRe.exec(comp.content)) !== null) {
             const styleFile = scannedProject.styles.find(s => s.path.endsWith(m[2].replace('./', '')));
             if (styleFile) {
-                componentStyles.push(cleanCssForAngular(styleFile.content));
+                // CSS Modules → scope under :host for Angular encapsulation
+                componentStyles.push(`:host {\n${cleanCssForAngular(styleFile.content)}\n}`);
             }
         }
         // Extract inline styles from styled-components
         const styledRe = /styled\.(\w+)`([^`]*)`/g;
         while ((m = styledRe.exec(comp.content)) !== null) {
-            componentStyles.push(`.styled-${m[1]} {\n${m[2].trim()}\n}`);
+            let css = m[2].trim();
+            // Convert interpolations to CSS custom properties
+            css = css.replace(/\$\{[^}]*\}/g, 'var(--dynamic-value)');
+            componentStyles.push(`:host ${m[1]} {\n  ${css.replace(/\n/g, '\n  ')}\n}`);
         }
         // Extract emotion css`` blocks
         const emotionRe = /css`([^`]*)`/g;
         while ((m = emotionRe.exec(comp.content)) !== null) {
-            componentStyles.push(m[1].trim());
+            let css = m[1].trim();
+            css = css.replace(/\$\{[^}]*\}/g, 'var(--dynamic-value)');
+            if (css) {
+                componentStyles.push(`:host {\n  ${css.replace(/\n/g, '\n  ')}\n}`);
+            }
+        }
+        // Extract MUI makeStyles / useStyles
+        const makeStylesRe = /makeStyles\(\s*\(\s*\w*\s*\)\s*=>\s*\(\{([\s\S]*?)\}\)\s*\)/g;
+        while ((m = makeStylesRe.exec(comp.content)) !== null) {
+            const stylesObj = m[1];
+            // Parse each class: className: { prop: value }
+            const classRe = /(\w+)\s*:\s*\{([^}]*)\}/g;
+            let classMatch;
+            while ((classMatch = classRe.exec(stylesObj)) !== null) {
+                const className = classMatch[1];
+                const props = classMatch[2];
+                const cssProps = props.replace(/(\w+)\s*:\s*['"]?([^,'"]+)['"]?,?/g, (_, p, v) => {
+                    return `  ${p.replace(/[A-Z]/g, (l) => `-${l.toLowerCase()}`)}: ${v.trim()};\n`;
+                });
+                componentStyles.push(`.${className} {\n${cssProps}}`);
+            }
         }
         if (componentStyles.length > 0) {
             // Extract component name from file
@@ -110,6 +142,12 @@ function cleanCssForAngular(css) {
     result = result.replace(/@theme\s+inline\s*\{[\s\S]*?\}\s*/g, '');
     // Remove @layer base blocks with @apply (Tailwind specific)
     result = result.replace(/@layer\s+base\s*\{[\s\S]*?\}\s*/g, '');
+    // Convert CSS custom properties from React naming to Angular/CLS naming
+    // --background → --sb-background, --foreground → --sb-foreground
+    // But preserve already-prefixed vars (--sb-*, --p-*)
+    result = result.replace(/var\(--(?!sb-|p-)(\w[\w-]*)\)/g, 'var(--sb-$1)');
+    // Remove React-specific comments
+    result = result.replace(/\/\*\s*@refresh\s*\*\//g, '');
     return result.trim();
 }
 // ---------------------------------------------------------------------------
@@ -157,7 +195,7 @@ module.exports = {
 function generatePostcssConfig() {
     return `module.exports = {
   plugins: {
-    tailwindcss: {},
+    '@tailwindcss/postcss': {},
     autoprefixer: {},
   },
 };

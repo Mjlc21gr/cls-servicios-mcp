@@ -137,8 +137,8 @@ async function getToken(): Promise<string> {
     throw new Error(`Auth failed: ${res.status} ${await res.text()}`);
   }
 
-  const data = await res.json() as { token?: string };
-  _token = data.token ?? '';
+  const data = await res.json() as { token?: string; accessToken?: string };
+  _token = data.accessToken ?? data.token ?? '';
   _tokenExpiry = Date.now() + TOKEN_TTL_MS;
   return _token;
 }

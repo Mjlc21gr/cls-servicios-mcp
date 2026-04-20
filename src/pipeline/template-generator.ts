@@ -38,14 +38,28 @@ const EVENT_MAP: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 const REACT_TAG_TO_ANGULAR: Record<string, string> = {
-  // shadcn/ui and common React UI components → PrimeNG/HTML
-  'Card': 'p-card', 'CardHeader': 'div', 'CardContent': 'div', 'CardTitle': 'h3', 'CardDescription': 'p',
+  // shadcn/ui and common React UI components → PrimeNG/Semantic HTML
+  'Card': 'p-card', 'CardHeader': 'header', 'CardContent': 'section', 'CardTitle': 'h3', 'CardDescription': 'p',
   'Button': 'p-button', 'Input': 'input', 'Label': 'label', 'Textarea': 'textarea',
-  'Select': 'p-select', 'SelectTrigger': 'div', 'SelectContent': 'div', 'SelectItem': 'div', 'SelectValue': 'span',
-  'Badge': 'p-tag', 'Dialog': 'p-dialog', 'DialogTrigger': 'div', 'DialogContent': 'div',
+  'Select': 'p-select', 'SelectTrigger': 'span', 'SelectContent': 'section', 'SelectItem': 'span', 'SelectValue': 'span',
+  'Badge': 'p-tag', 'Dialog': 'p-dialog', 'DialogTrigger': 'span', 'DialogContent': 'section',
   'Table': 'p-table', 'TableHeader': 'thead', 'TableBody': 'tbody', 'TableRow': 'tr', 'TableHead': 'th', 'TableCell': 'td',
-  // Framer Motion → plain HTML
-  'AnimatePresence': 'div', 'motion.div': 'div', 'motion.span': 'span', 'motion.section': 'section',
+  // Layout components → semantic HTML
+  'Container': 'main', 'Wrapper': 'section', 'Layout': 'main',
+  'Header': 'header', 'Footer': 'footer', 'Sidebar': 'aside', 'Nav': 'nav', 'Navigation': 'nav',
+  'Main': 'main', 'Content': 'section', 'Section': 'section', 'Article': 'article',
+  'Aside': 'aside', 'Figure': 'figure', 'FigCaption': 'figcaption',
+  // Form components → semantic form elements
+  'Form': 'form', 'FormGroup': 'fieldset', 'FormLabel': 'label', 'FormControl': 'fieldset',
+  'FormField': 'fieldset', 'FormItem': 'fieldset', 'FormMessage': 'small',
+  // Tabs → PrimeNG
+  'Tabs': 'p-tabview', 'TabsList': 'nav', 'TabsTrigger': 'button', 'TabsContent': 'section',
+  // Accordion → PrimeNG
+  'Accordion': 'p-accordion', 'AccordionItem': 'p-accordion-tab',
+  // Framer Motion → plain semantic HTML
+  'AnimatePresence': 'section', 'motion.div': 'section', 'motion.span': 'span', 'motion.section': 'section',
+  'motion.article': 'article', 'motion.nav': 'nav', 'motion.header': 'header', 'motion.footer': 'footer',
+  'motion.main': 'main', 'motion.aside': 'aside', 'motion.ul': 'ul', 'motion.li': 'li',
   // Lucide/React icons → PrimeNG icons (use <i> with pi class)
   'ShieldCheck': 'i', 'AlertCircle': 'i', 'PlusCircle': 'i', 'History': 'i', 'Camera': 'i', 'X': 'i',
   'Car': 'i', 'Home': 'i', 'Calendar': 'i', 'Clock': 'i', 'ChevronDown': 'i', 'ChevronUp': 'i',
@@ -53,6 +67,26 @@ const REACT_TAG_TO_ANGULAR: Record<string, string> = {
   'Check': 'i', 'Close': 'i', 'Menu': 'i', 'Settings': 'i', 'User': 'i', 'Mail': 'i',
   // Toast → PrimeNG toast
   'Toaster': 'p-toast', 'Toast': 'p-toast',
+  // Progress → PrimeNG
+  'Progress': 'p-progressbar', 'ProgressBar': 'p-progressbar',
+  // Avatar → PrimeNG
+  'Avatar': 'p-avatar', 'AvatarFallback': 'span', 'AvatarImage': 'img',
+  // Separator/Divider → PrimeNG
+  'Separator': 'p-divider', 'Divider': 'p-divider',
+  // Skeleton → PrimeNG
+  'Skeleton': 'p-skeleton',
+  // Switch → PrimeNG ToggleSwitch
+  'Switch': 'p-toggleswitch',
+  // Slider → PrimeNG
+  'Slider': 'p-slider',
+  // Tooltip → PrimeNG
+  'Tooltip': 'span', 'TooltipTrigger': 'span', 'TooltipContent': 'span',
+  // Popover → PrimeNG OverlayPanel
+  'Popover': 'p-overlaypanel', 'PopoverTrigger': 'span', 'PopoverContent': 'section',
+  // Alert → PrimeNG Message
+  'Alert': 'p-message', 'AlertTitle': 'strong', 'AlertDescription': 'span',
+  // ScrollArea → native
+  'ScrollArea': 'section',
 };
 
 const ICON_CLASS_MAP: Record<string, string> = {
@@ -421,8 +455,12 @@ function postProcessTemplate(html: string): string {
   result = result.replace(/<AlertTriangle[^>]*\/>/g, '<i class="pi pi-exclamation-triangle"></i>');
   result = result.replace(/<RefreshCcw[^>]*\/>/g, '<i class="pi pi-refresh"></i>');
 
-  // 10. Fix pInputTextarea → pTextarea (PrimeNG 19)
+  // 10. Fix pInputTextarea → pTextarea (PrimeNG 21)
   result = result.replace(/pInputTextarea/g, 'pTextarea');
+
+  // 11. Fix p-dropdown → p-select (PrimeNG 21)
+  result = result.replace(/<p-dropdown/g, '<p-select');
+  result = result.replace(/<\/p-dropdown>/g, '</p-select>');
 
   return result;
 }

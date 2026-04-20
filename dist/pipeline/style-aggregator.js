@@ -24,12 +24,94 @@ function camelToKebab(str) {
     return str.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 /**
+ * Map of common JS style values to Tailwind utility classes.
+ * Used to convert inline styles and sx props to Tailwind where possible.
+ */
+const JS_TO_TAILWIND = {
+    display: { flex: 'flex', grid: 'grid', block: 'block', 'inline-flex': 'inline-flex', none: 'hidden' },
+    flexDirection: { column: 'flex-col', row: 'flex-row', 'column-reverse': 'flex-col-reverse', 'row-reverse': 'flex-row-reverse' },
+    justifyContent: { center: 'justify-center', 'flex-start': 'justify-start', 'flex-end': 'justify-end', 'space-between': 'justify-between', 'space-around': 'justify-around' },
+    alignItems: { center: 'items-center', 'flex-start': 'items-start', 'flex-end': 'items-end', stretch: 'items-stretch', baseline: 'items-baseline' },
+    textAlign: { center: 'text-center', left: 'text-left', right: 'text-right' },
+    fontWeight: { bold: 'font-bold', '600': 'font-semibold', '500': 'font-medium', '400': 'font-normal', '300': 'font-light' },
+    overflow: { hidden: 'overflow-hidden', auto: 'overflow-auto', scroll: 'overflow-scroll' },
+    position: { relative: 'relative', absolute: 'absolute', fixed: 'fixed', sticky: 'sticky' },
+    cursor: { pointer: 'cursor-pointer', 'not-allowed': 'cursor-not-allowed', default: 'cursor-default' },
+};
+/**
+ * Convert spacing values (px, rem) to Tailwind spacing scale.
+ */
+function spacingToTailwind(value) {
+    const pxMatch = value.match(/^(\d+)px$/);
+    if (pxMatch) {
+        const px = parseInt(pxMatch[1], 10);
+        const scale = {
+            0: '0', 1: 'px', 2: '0.5', 4: '1', 6: '1.5', 8: '2', 10: '2.5',
+            12: '3', 14: '3.5', 16: '4', 20: '5', 24: '6', 28: '7', 32: '8',
+            36: '9', 40: '10', 44: '11', 48: '12', 56: '14', 64: '16', 80: '20', 96: '24',
+        };
+        return scale[px] ?? null;
+    }
+    const remMatch = value.match(/^([\d.]+)rem$/);
+    if (remMatch) {
+        const rem = parseFloat(remMatch[1]);
+        const px = rem * 16;
+        return spacingToTailwind(`${px}px`);
+    }
+    return null;
+}
+/**
+ * Try to convert a JS style property+value to a Tailwind class.
+ * Returns the class string or null if no mapping exists.
+ */
+function jsStyleToTailwindClass(prop, value) {
+    // Direct mapping
+    if (JS_TO_TAILWIND[prop]?.[value]) {
+        return JS_TO_TAILWIND[prop][value];
+    }
+    // Spacing properties
+    const spacingProps = {
+        padding: 'p', paddingTop: 'pt', paddingBottom: 'pb', paddingLeft: 'pl', paddingRight: 'pr',
+        margin: 'm', marginTop: 'mt', marginBottom: 'mb', marginLeft: 'ml', marginRight: 'mr',
+        gap: 'gap', rowGap: 'gap-y', columnGap: 'gap-x',
+    };
+    if (spacingProps[prop]) {
+        const tw = spacingToTailwind(value);
+        if (tw)
+            return `${spacingProps[prop]}-${tw}`;
+    }
+    // Width/height
+    if (prop === 'width' || prop === 'height') {
+        const prefix = prop === 'width' ? 'w' : 'h';
+        if (value === '100%')
+            return `${prefix}-full`;
+        if (value === 'auto')
+            return `${prefix}-auto`;
+        if (value === '100vw')
+            return `${prefix}-screen`;
+        if (value === '100vh')
+            return `${prefix}-screen`;
+        const tw = spacingToTailwind(value);
+        if (tw)
+            return `${prefix}-${tw}`;
+    }
+    // Border radius
+    if (prop === 'borderRadius') {
+        if (value === '50%' || value === '9999px')
+            return 'rounded-full';
+        const tw = spacingToTailwind(value);
+        if (tw)
+            return `rounded-${tw}`;
+        return 'rounded';
+    }
+    return null;
+}
+/**
  * Convert a JS style object string to CSS properties.
  * e.g. `backgroundColor: 'red', padding: '16px'` → `background-color: red;\npadding: 16px;`
  */
 function jsStyleToCSS(jsStyle) {
     const lines = [];
-    // Match key: 'value' or key: "value" or key: number patterns
     const propRe = /(\w+)\s*:\s*(?:'([^']*)'|"([^"]*)"|(\d+[\w%]*))/g;
     let match;
     while ((match = propRe.exec(jsStyle)) !== null) {
@@ -38,6 +120,28 @@ function jsStyleToCSS(jsStyle) {
         lines.push(`  ${prop}: ${value};`);
     }
     return lines.join('\n');
+}
+/**
+ * Convert a JS style object to Tailwind classes where possible,
+ * and return remaining CSS for properties that can't be mapped.
+ */
+function jsStyleToTailwindAndCSS(jsStyle) {
+    const tailwindClasses = [];
+    const remainingCSS = [];
+    const propRe = /(\w+)\s*:\s*(?:'([^']*)'|"([^"]*)"|(\d+[\w%]*))/g;
+    let match;
+    while ((match = propRe.exec(jsStyle)) !== null) {
+        const prop = match[1];
+        const value = match[2] ?? match[3] ?? match[4] ?? '';
+        const twClass = jsStyleToTailwindClass(prop, value);
+        if (twClass) {
+            tailwindClasses.push(twClass);
+        }
+        else {
+            remainingCSS.push(`  ${camelToKebab(prop)}: ${value};`);
+        }
+    }
+    return { tailwindClasses, remainingCSS: remainingCSS.join('\n') };
 }
 // ---------------------------------------------------------------------------
 // Style scoping
@@ -107,6 +211,7 @@ function normalizePath(path) {
 // ---------------------------------------------------------------------------
 /**
  * Extract CSS from styled-components tagged template literals.
+ * Converts to proper SCSS with semantic class names.
  */
 function extractStyledComponents(source) {
     const rules = [];
@@ -114,34 +219,54 @@ function extractStyledComponents(source) {
     const re = new RegExp(STYLED_COMPONENT_RE.source, 'g');
     while ((match = re.exec(source)) !== null) {
         const tag = match[1] ?? 'div';
-        const css = match[2] ?? '';
-        rules.push(`.styled-${tag} {\n${css.trim()}\n}`);
+        let css = match[2] ?? '';
+        // Convert interpolations ${props => ...} to CSS custom properties
+        css = css.replace(/\$\{[^}]*\}/g, 'var(--dynamic-value)');
+        // Convert nested & selectors (styled-components syntax → SCSS)
+        // Already valid SCSS syntax, just clean up
+        css = css.trim();
+        if (css) {
+            rules.push(`:host ${tag} {\n  ${css.replace(/\n/g, '\n  ')}\n}`);
+        }
     }
     return rules.join('\n\n');
 }
 /**
  * Extract CSS from emotion css`` tagged template literals.
+ * Scopes under :host for Angular component encapsulation.
  */
 function extractEmotionCSS(source) {
     const rules = [];
     let match;
     const re = new RegExp(EMOTION_CSS_RE.source, 'g');
     while ((match = re.exec(source)) !== null) {
-        rules.push(match[1].trim());
+        let css = match[1].trim();
+        // Convert interpolations to CSS custom properties
+        css = css.replace(/\$\{[^}]*\}/g, 'var(--dynamic-value)');
+        if (css) {
+            rules.push(`:host {\n  ${css.replace(/\n/g, '\n  ')}\n}`);
+        }
     }
     return rules.join('\n\n');
 }
 /**
  * Extract CSS from MUI sx={{ ... }} props.
+ * Converts to Tailwind classes where possible, remaining goes to SCSS.
  */
 function extractMuiSx(source) {
     const rules = [];
     let match;
     const re = new RegExp(MUI_SX_RE.source, 'g');
     while ((match = re.exec(source)) !== null) {
-        const cssProps = jsStyleToCSS(match[1]);
-        if (cssProps.trim()) {
-            rules.push(`:host {\n${cssProps}\n}`);
+        const { tailwindClasses, remainingCSS } = jsStyleToTailwindAndCSS(match[1]);
+        // Tailwind classes are added to the template by the template generator
+        // Here we only emit the CSS that couldn't be converted
+        if (remainingCSS.trim()) {
+            rules.push(`:host {\n${remainingCSS}\n}`);
+        }
+        // Store tailwind classes as a comment for reference
+        if (tailwindClasses.length > 0) {
+            rules.push(`/* Tailwind equivalent: ${tailwindClasses.join(' ')} */`);
         }
     }
     return rules.join('\n\n');
@@ -154,12 +279,11 @@ function extractMuiSx(source) {
  */
 function generateGlobalStyles(_options) {
     return `/* =================================================================
-   Global Styles — Angular Project
+   Global Styles — Angular 20 + PrimeNG 21 + Tailwind v4
    Generated by migrate_full_project pipeline
    ================================================================= */
 
-/* PrimeNG 19 uses preset themes via providePrimeNG() in app.config.ts */
-/* Only primeicons CSS is needed as a direct import */
+/* PrimeNG 21 uses preset themes via providePrimeNG() in app.config.ts */
 
 /* Seguros Bolívar Design System Theme */
 @use './styles/sb-primeng-theme';
@@ -179,6 +303,13 @@ html, body {
   color: var(--sb-gray-900, #212529);
   background-color: var(--sb-white, #ffffff);
 }
+
+:focus-visible {
+  outline: 2px solid var(--sb-primary, #0066cc);
+  outline-offset: 2px;
+}
+
+html { scroll-behavior: smooth; }
 `;
 }
 // ---------------------------------------------------------------------------

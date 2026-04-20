@@ -75,9 +75,9 @@ export function collapseShadcnSelect(html: string): string {
 export function collapseShadcnCard(html: string): string {
   let result = html;
 
-  // CardHeader → div with header styling
-  result = result.replace(/<CardHeader[^>]*>/g, '<div class="p-4 pb-2">');
-  result = result.replace(/<\/CardHeader>/g, '</div>');
+  // CardHeader → header with styling
+  result = result.replace(/<CardHeader[^>]*>/g, '<header class="p-4 pb-2">');
+  result = result.replace(/<\/CardHeader>/g, '</header>');
 
   // CardTitle → h3
   result = result.replace(/<CardTitle[^>]*>/g, '<h3 class="text-lg font-semibold">');
@@ -87,13 +87,13 @@ export function collapseShadcnCard(html: string): string {
   result = result.replace(/<CardDescription[^>]*>/g, '<p class="text-sm text-gray-500">');
   result = result.replace(/<\/CardDescription>/g, '</p>');
 
-  // CardContent → div
-  result = result.replace(/<CardContent([^>]*)>/g, '<div class="p-4"$1>');
-  result = result.replace(/<\/CardContent>/g, '</div>');
+  // CardContent → section
+  result = result.replace(/<CardContent([^>]*)>/g, '<section class="p-4"$1>');
+  result = result.replace(/<\/CardContent>/g, '</section>');
 
-  // CardFooter → div
-  result = result.replace(/<CardFooter[^>]*>/g, '<div class="p-4 pt-0 flex justify-end">');
-  result = result.replace(/<\/CardFooter>/g, '</div>');
+  // CardFooter → footer
+  result = result.replace(/<CardFooter[^>]*>/g, '<footer class="p-4 pt-0 flex justify-end">');
+  result = result.replace(/<\/CardFooter>/g, '</footer>');
 
   return result;
 }
@@ -105,11 +105,11 @@ export function collapseShadcnCard(html: string): string {
 export function collapseMuiComponents(html: string): string {
   let result = html;
 
-  // MUI TextField → input pInputText
+  // MUI TextField → input pInputText with semantic fieldset
   result = result.replace(/<TextField([^>]*?)\/>/g, (_match, attrs: string) => {
     const label = attrs.match(/label="([^"]*)"/)?.[1] ?? '';
     const name = attrs.match(/name="([^"]*)"/)?.[1] ?? '';
-    return `<div class="field"><label>${label}</label><input pInputText name="${name}" class="w-full" /></div>`;
+    return `<fieldset class="field"><label>${label}</label><input pInputText name="${name}" class="w-full" /></fieldset>`;
   });
 
   // MUI Dialog → p-dialog
@@ -132,9 +132,9 @@ export function collapseMuiComponents(html: string): string {
 export function collapseAntdComponents(html: string): string {
   let result = html;
 
-  // Antd Form.Item → div.field with label
-  result = result.replace(/<Form\.Item\s+label="([^"]*)"[^>]*>/g, '<div class="field"><label>$1</label>');
-  result = result.replace(/<\/Form\.Item>/g, '</div>');
+  // Antd Form.Item → fieldset with label (semantic)
+  result = result.replace(/<Form\.Item\s+label="([^"]*)"[^>]*>/g, '<fieldset class="field"><label>$1</label>');
+  result = result.replace(/<\/Form\.Item>/g, '</fieldset>');
 
   // Antd Table → p-table (simplified)
   result = result.replace(/<Table([^>]*)>/g, '<p-table$1>');
@@ -201,16 +201,16 @@ export function convertIconsToPI(html: string): string {
 export function convertMotionToHtml(html: string): string {
   let result = html;
 
-  // <AnimatePresence ...>...</AnimatePresence> → just children
+  // <AnimatePresence ...>...</AnimatePresence> → just children (no wrapper needed)
   result = result.replace(/<AnimatePresence[^>]*>/g, '');
   result = result.replace(/<\/AnimatePresence>/g, '');
 
-  // <motion.div ...> → <div class="transition-all" ...>
+  // <motion.element ...> → <element class="transition-all" ...>
   result = result.replace(/<motion\.(\w+)([^>]*)>/g, '<$1 class="transition-all"$2>');
   result = result.replace(/<\/motion\.(\w+)>/g, '</$1>');
 
   // Remove motion-specific attributes
-  result = result.replace(/\s*(?:initial|animate|exit|transition|whileHover|whileTap)=\{[^}]*\}/g, '');
+  result = result.replace(/\s*(?:initial|animate|exit|transition|whileHover|whileTap|whileInView|variants|layout|layoutId)=\{[^}]*\}/g, '');
 
   return result;
 }

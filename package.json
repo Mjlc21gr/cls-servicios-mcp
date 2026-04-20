@@ -16,6 +16,7 @@
     }
   },
   "bin": {
+    "cls-migrate": "dist/commands.js",
     "mcp-front-migrate": "dist/cli.js",
     "cls-front-migrate": "dist/stdio-server.js",
     "cls-front-migrate-http": "dist/http-server.js",
@@ -31,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "clean": "rm -rf dist",
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true})\"",
     "prebuild": "npm run clean",
     "prepublishOnly": "npm run build",
     "start": "node dist/stdio-server.js",

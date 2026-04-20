@@ -38,6 +38,10 @@ import { validateClassContext } from './class-context-layer.js';
 import { validateTemplateIntegrity } from './template-integrity-layer.js';
 import { validateOutput } from './output-validator.js';
 import { toKebabCase, toPascalCase } from '../utils/naming.utils.js';
+// Semantic HTML Engine — eliminates divs, enforces clean markup
+import { applySemanticHtml } from './semantic-html-engine.js';
+// Compilation Validator — compiles output and logs errors to API DB
+import { compileAndLogErrors } from './compilation-validator.js';
 
 // ---------------------------------------------------------------------------
 // Topological sort (Kahn's algorithm)
@@ -260,6 +264,17 @@ export async function migrateFullProject(
     }
 
     // -----------------------------------------------------------------------
+    // Step 4b2: Apply Semantic HTML Engine — eliminate divs, enforce clean markup
+    // Replaces unnecessary divs with <section>, <nav>, <article>, <main>, etc.
+    // -----------------------------------------------------------------------
+    for (const [key, comp] of transformedComponents) {
+      const cleanHtml = applySemanticHtml(comp.componentHtml, comp.componentName);
+      if (cleanHtml !== comp.componentHtml) {
+        transformedComponents.set(key, { ...comp, componentHtml: cleanHtml });
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // Step 4c: Convert hooks to real Angular services (Logic-to-Service)
     // -----------------------------------------------------------------------
     const typesFile = scannedProject.configs.find(f => f.path.includes('types'));
@@ -459,9 +474,8 @@ export async function migrateFullProject(
     // Routes at src/app/app.routes.ts
     allFiles.set('src/app/app.routes.ts', fixedRoutesContent);
 
-    // Global styles at src/styles.scss — prepend Tailwind directives
-    const tailwindDirectives = `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n\n`;
-    allFiles.set('src/styles.scss', tailwindDirectives + styleResult.globalStyles);
+    // Global styles at src/styles.scss
+    allFiles.set('src/styles.scss', styleResult.globalStyles);
 
     // -----------------------------------------------------------------------
     // Step 11: Write all files to outputDir
@@ -488,9 +502,15 @@ export async function migrateFullProject(
     }
 
     // -----------------------------------------------------------------------
-    // Step 13: Validate output
+    // Step 13: Validate output (static analysis)
     // -----------------------------------------------------------------------
     const validationReport = validateOutput(allFiles);
+
+    // -----------------------------------------------------------------------
+    // Step 13b: Compile the generated Angular project
+    // Runs npm install + ng build, parses errors, saves to API DB
+    // -----------------------------------------------------------------------
+    const compilationResult = await compileAndLogErrors(outputDir, moduleName);
 
     // -----------------------------------------------------------------------
     // Step 14: Return FullMigrationResult
@@ -518,6 +538,7 @@ export async function migrateFullProject(
       validationReport,
       duration: Date.now() - startTime,
       errors: errors.length > 0 ? errors : undefined,
+      compilation: compilationResult,
     };
   } catch (err: unknown) {
     // Top-level catch for unexpected failures

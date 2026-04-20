@@ -66,6 +66,11 @@ const RULES: Record<string, [string, string]> = {
   // Custom codes
   'TS-991002': ['inline_template', 'code-emitter'],
   'TS-992012': ['standalone_import', 'code-emitter'],
+
+  // PostCSS / Tailwind / Build config errors
+  'POSTCSS_CONFIG': ['postcss_config', 'project-scaffolder'],
+  'MODULE_NOT_FOUND': ['missing_dependency', 'project-scaffolder'],
+  'SCSS_ERROR': ['style_error', 'project-scaffolder'],
 };
 
 // ─── Frequency Map (trained from DB) ────────────────────────────────────────

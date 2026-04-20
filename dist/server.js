@@ -26,6 +26,10 @@ import { toKebabCase, buildModulePaths } from './utils/naming.utils.js';
 import { buildSourceRepoConfig, buildDestRepoConfig, getEnvBool, getEnvNumber, getEnvStatus, ENV_KEYS, } from './utils/env.utils.js';
 // --- Pipeline completo de proyecto ---
 import { migrateFullProject } from './pipeline/project-orchestrator.js';
+// --- 4 Capas de Reingeniería Estructural ---
+import { applySemanticUI } from './pipeline/ui-semantic-engine.js';
+// Semantic HTML Engine — eliminates divs, enforces clean markup
+import { applySemanticHtml } from './pipeline/semantic-html-engine.js';
 // ---------------------------------------------------------------------------
 // Zod Schemas – Pipeline original
 // ---------------------------------------------------------------------------
@@ -101,7 +105,12 @@ async function runConvertPipeline(sourceCode) {
     const irWithState = mapStateToAngular(ir);
     const irWithTemplate = generateAngularTemplate(irWithState);
     const irWithPrimeNG = mapToPrimeNG(irWithTemplate);
-    const artifact = emitAngularArtifact(irWithPrimeNG);
+    // Apply semantic UI transformations (React UI trees → PrimeNG)
+    let semanticTemplate = applySemanticUI(irWithPrimeNG.angularTemplate);
+    // Apply semantic HTML engine (eliminate divs, enforce clean markup)
+    semanticTemplate = applySemanticHtml(semanticTemplate, ir.componentName);
+    const irFinal = { ...irWithPrimeNG, angularTemplate: semanticTemplate };
+    const artifact = emitAngularArtifact(irFinal);
     return {
         content: [
             {
@@ -497,11 +506,20 @@ export function createServer() {
                 totalFiles: result.filesGenerated.length,
                 migrationSummary: result.migrationSummary,
                 validationIssues: result.validationReport.length,
+                compilation: result.compilation ? {
+                    success: result.compilation.success,
+                    errorCount: result.compilation.errorCount,
+                    savedToDb: result.compilation.savedToDb,
+                    intentoId: result.compilation.intentoId,
+                    errors: result.compilation.errors.slice(0, 20), // Top 20 errors
+                } : undefined,
                 errors: result.errors?.length ?? 0,
                 duration: result.duration + 'ms',
-                nextStep: result.status === 'success'
-                    ? `cd ${result.outputDir} && npm install && ng serve`
-                    : 'Check errors above',
+                nextStep: result.compilation?.success
+                    ? `cd ${result.outputDir} && ng serve`
+                    : result.compilation
+                        ? `${result.compilation.errorCount} compilation errors saved to DB. Run ML optimizer to fix.`
+                        : 'Check errors above',
             };
             return {
                 content: [{

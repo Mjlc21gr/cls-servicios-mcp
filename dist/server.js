@@ -525,6 +525,75 @@ export function createServer() {
         }
     });
     // ═══════════════════════════════════════════════════════════════════════════
+    // TOOLS ML — Base de datos, clasificador, optimizer
+    // ═══════════════════════════════════════════════════════════════════════════
+    server.tool('ml_db_query', `Consulta la base de datos del ML optimizer. Permite ver intentos, errores, patches y seguimiento.`, {
+        table: z.enum(['intentos', 'errores', 'patches', 'ml_seguimiento']).describe('Tabla a consultar'),
+        limit: z.number().optional().describe('Máximo de registros (default: 50)'),
+    }, async ({ table, limit }) => {
+        try {
+            const { configureDb: cfgDb, isDbConfigured } = await import('./ml/db-client.js');
+            if (!isDbConfigured()) {
+                return { content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: 'DB no configurada. Necesitas clientId y clientSecret.' }) }], isError: true };
+            }
+            const tableMap = { intentos: 'INTENTOS', errores: 'ERRORES', patches: 'PATCHES', ml_seguimiento: 'ML_SEGUIMIENTO' };
+            const { getAllErrors, getErrors, getPendientes, getResumen } = await import('./ml/db-client.js');
+            let data;
+            switch (table) {
+                case 'errores':
+                    data = await getAllErrors();
+                    break;
+                case 'ml_seguimiento':
+                    data = await getPendientes();
+                    break;
+                default: {
+                    const { getAuthToken } = await import('./ml/db-client.js');
+                    const token = await getAuthToken();
+                    const apiBase = 'https://r4yl4sit9d.execute-api.us-east-1.amazonaws.com/dev/api/v1';
+                    const res = await fetch(`${apiBase}/queries/execute/${tableMap[table]}`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                        signal: AbortSignal.timeout(30_000),
+                    });
+                    data = res.ok ? await res.json() : [];
+                }
+            }
+            const rows = Array.isArray(data) ? data.slice(0, limit ?? 50) : [data];
+            return { content: [{ type: 'text', text: JSON.stringify({ status: 'success', table, count: rows.length, rows }, null, 2) }] };
+        }
+        catch (error) {
+            return { content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: error instanceof Error ? error.message : String(error) }) }], isError: true };
+        }
+    });
+    server.tool('ml_db_status', `Muestra el resumen del estado del ML: errores pendientes, patches aplicados, tasa de éxito.`, {}, async () => {
+        try {
+            const { isDbConfigured, getResumen, getPendientes } = await import('./ml/db-client.js');
+            if (!isDbConfigured()) {
+                return { content: [{ type: 'text', text: JSON.stringify({ status: 'not_configured', message: 'DB no configurada. Usa ml_db_configure primero.' }) }] };
+            }
+            const [resumen, pendientes] = await Promise.all([getResumen(), getPendientes()]);
+            return { content: [{ type: 'text', text: JSON.stringify({ status: 'success', resumen, pendientesCount: pendientes.length, pendientes: pendientes.slice(0, 10) }, null, 2) }] };
+        }
+        catch (error) {
+            return { content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: error instanceof Error ? error.message : String(error) }) }], isError: true };
+        }
+    });
+    server.tool('ml_db_configure', `Configura la conexión a la base de datos del ML optimizer.`, {
+        clientId: z.string().describe('Client ID para autenticación'),
+        clientSecret: z.string().describe('Client Secret para autenticación'),
+    }, async ({ clientId, clientSecret }) => {
+        const { configureDb } = await import('./ml/db-client.js');
+        configureDb({ clientId, clientSecret });
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'success', message: 'DB configurada correctamente.' }) }] };
+    });
+    server.tool('ml_classify_error', `Clasifica un error de compilación TypeScript/Angular y determina qué capa del MCP necesita ser parcheada.`, {
+        errorCode: z.string().describe('Código de error (ej: TS2663, NG8001)'),
+        errorMessage: z.string().optional().describe('Mensaje del error'),
+    }, async ({ errorCode, errorMessage }) => {
+        const { classify } = await import('./ml/classifier.js');
+        const result = classify(errorCode, errorMessage ?? '');
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'success', ...result }, null, 2) }] };
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
     // PROMPTS DE ORQUESTACIÓN
     // ═══════════════════════════════════════════════════════════════════════════
     server.prompt('migrate_react_to_angular', `Prompt de orquestación para migrar un componente React completo a Angular CLS.`, {

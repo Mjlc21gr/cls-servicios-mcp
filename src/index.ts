@@ -39,6 +39,7 @@ export type { ClassifyResult } from './ml/classifier.js';
 export {
   configureDb,
   isDbConfigured,
+  getAuthToken,
   crearIntento,
   insertError,
   getErrors,

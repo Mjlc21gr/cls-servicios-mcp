@@ -25,7 +25,7 @@ export { validateInput } from './security/validator.js';
 export { runOptimizer } from './ml/optimizer.js';
 export { classify, train } from './ml/classifier.js';
 // ─── ML Database ─────────────────────────────────────────────────────────────
-export { configureDb, isDbConfigured, crearIntento, insertError, getErrors, getAllErrors, logPatch, registrarSeguimiento, marcarSolucionado, marcarNoSolucionado, getPendientes, incrementarExito, getResumen, } from './ml/db-client.js';
+export { configureDb, isDbConfigured, getAuthToken, crearIntento, insertError, getErrors, getAllErrors, logPatch, registrarSeguimiento, marcarSolucionado, marcarNoSolucionado, getPendientes, incrementarExito, getResumen, } from './ml/db-client.js';
 // ─── ML LLM ──────────────────────────────────────────────────────────────────
 export { configureLlm, isLlmConfigured, isAvailable as isLlmAvailable, sugerirFix } from './ml/llm-client.js';
 // ─── ML Defaults ─────────────────────────────────────────────────────────────

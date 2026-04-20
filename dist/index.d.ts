@@ -22,7 +22,7 @@ export { runOptimizer } from './ml/optimizer.js';
 export type { OptimizerConfig, OptimizerResult } from './ml/optimizer.js';
 export { classify, train } from './ml/classifier.js';
 export type { ClassifyResult } from './ml/classifier.js';
-export { configureDb, isDbConfigured, crearIntento, insertError, getErrors, getAllErrors, logPatch, registrarSeguimiento, marcarSolucionado, marcarNoSolucionado, getPendientes, incrementarExito, getResumen, } from './ml/db-client.js';
+export { configureDb, isDbConfigured, getAuthToken, crearIntento, insertError, getErrors, getAllErrors, logPatch, registrarSeguimiento, marcarSolucionado, marcarNoSolucionado, getPendientes, incrementarExito, getResumen, } from './ml/db-client.js';
 export type { DbConfig, DbError, DbIntento, DbPatch, DbSeguimiento } from './ml/db-client.js';
 export { configureLlm, isLlmConfigured, isAvailable as isLlmAvailable, sugerirFix } from './ml/llm-client.js';
 export type { LlmConfig, LlmFix } from './ml/llm-client.js';

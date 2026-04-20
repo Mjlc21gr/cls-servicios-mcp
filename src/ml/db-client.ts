@@ -133,7 +133,10 @@ async function getToken(): Promise<string> {
 
 function nextId(table: string): number {
   _idCounters[table] = (_idCounters[table] ?? 0) + 1;
-  return Date.now() * 1000 + _idCounters[table];
+  // Format: YYYYMMDD_HHMMSS_SEQ (readable, sortable, unique per session)
+  const now = new Date();
+  const date = now.toISOString().replace(/[-:T]/g, '').slice(0, 14); // 20260420113000
+  return Number(`${date}${String(_idCounters[table]).padStart(4, '0')}`);
 }
 
 async function insert(table: string, record: Record<string, unknown>): Promise<void> {
@@ -166,6 +169,13 @@ async function queryTable<T>(table: string, params?: Record<string, string>): Pr
   if (!res.ok) return [];
   const data = await res.json();
   return (Array.isArray(data) ? data : [data]) as T[];
+}
+
+/**
+ * Get a valid auth token (for use by MCP tools that need direct API access).
+ */
+export async function getAuthToken(): Promise<string> {
+  return getToken();
 }
 
 // ─── Intentos ────────────────────────────────────────────────────────────────

@@ -44,6 +44,8 @@ export {
   insertError,
   getErrors,
   getAllErrors,
+  getIntentos,
+  getPatches,
   logPatch,
   registrarSeguimiento,
   marcarSolucionado,

@@ -528,34 +528,29 @@ export function createServer() {
     // TOOLS ML — Base de datos, clasificador, optimizer
     // ═══════════════════════════════════════════════════════════════════════════
     server.tool('ml_db_query', `Consulta la base de datos del ML optimizer. Permite ver intentos, errores, patches y seguimiento.`, {
-        table: z.enum(['intentos', 'errores', 'patches', 'ml_seguimiento']).describe('Tabla a consultar'),
+        table: z.enum(['intentos', 'errores', 'patches', 'ml-seguimiento']).describe('Tabla a consultar'),
         limit: z.number().optional().describe('Máximo de registros (default: 50)'),
     }, async ({ table, limit }) => {
         try {
-            const { configureDb: cfgDb, isDbConfigured } = await import('./ml/db-client.js');
+            const { isDbConfigured, getAllErrors, getPendientes, getIntentos, getPatches } = await import('./ml/db-client.js');
             if (!isDbConfigured()) {
-                return { content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: 'DB no configurada. Necesitas clientId y clientSecret.' }) }], isError: true };
+                return { content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: 'DB no configurada. Usa ml_db_configure primero con clientId y clientSecret.' }) }], isError: true };
             }
-            const tableMap = { intentos: 'INTENTOS', errores: 'ERRORES', patches: 'PATCHES', ml_seguimiento: 'ML_SEGUIMIENTO' };
-            const { getAllErrors, getErrors, getPendientes, getResumen } = await import('./ml/db-client.js');
             let data;
             switch (table) {
+                case 'intentos':
+                    data = await getIntentos();
+                    break;
                 case 'errores':
                     data = await getAllErrors();
                     break;
-                case 'ml_seguimiento':
+                case 'patches':
+                    data = await getPatches();
+                    break;
+                case 'ml-seguimiento':
                     data = await getPendientes();
                     break;
-                default: {
-                    const { getAuthToken } = await import('./ml/db-client.js');
-                    const token = await getAuthToken();
-                    const apiBase = 'https://r4yl4sit9d.execute-api.us-east-1.amazonaws.com/dev/api/v1';
-                    const res = await fetch(`${apiBase}/queries/execute/${tableMap[table]}`, {
-                        headers: { Authorization: `Bearer ${token}` },
-                        signal: AbortSignal.timeout(30_000),
-                    });
-                    data = res.ok ? await res.json() : [];
-                }
+                default: data = [];
             }
             const rows = Array.isArray(data) ? data.slice(0, limit ?? 50) : [data];
             return { content: [{ type: 'text', text: JSON.stringify({ status: 'success', table, count: rows.length, rows }, null, 2) }] };
@@ -592,6 +587,35 @@ export function createServer() {
         const { classify } = await import('./ml/classifier.js');
         const result = classify(errorCode, errorMessage ?? '');
         return { content: [{ type: 'text', text: JSON.stringify({ status: 'success', ...result }, null, 2) }] };
+    });
+    server.tool('ml_optimize', `Ejecuta el ciclo ML optimizer: transforma React→Angular, compila, detecta errores, parchea el MCP automáticamente, y repite hasta que compile. Guarda todo en la base de datos.`, {
+        mcpRoot: z.string().describe('Ruta raíz del proyecto MCP (donde está src/ y dist/)'),
+        reactSource: z.string().describe('Ruta al proyecto React fuente'),
+        angularOutput: z.string().describe('Ruta donde se genera el proyecto Angular'),
+        moduleName: z.string().describe('Nombre del módulo Angular'),
+        maxIterations: z.number().optional().describe('Máximo de iteraciones (default: 5)'),
+        dbClientId: z.string().describe('Client ID para la base de datos'),
+        dbClientSecret: z.string().describe('Client Secret para la base de datos'),
+    }, async (args) => {
+        try {
+            const { runOptimizer } = await import('./ml/optimizer.js');
+            const llmConfig = process.env['GEMINI_API_KEY']
+                ? { url: 'https://generativelanguage.googleapis.com/v1beta/models', model: 'gemini-2.0-flash', apiKey: process.env['GEMINI_API_KEY'], type: 'gemini' }
+                : undefined;
+            const result = await runOptimizer({
+                mcpRoot: args.mcpRoot,
+                reactSource: args.reactSource,
+                angularOutput: args.angularOutput,
+                moduleName: args.moduleName,
+                maxIterations: args.maxIterations,
+                db: { clientId: args.dbClientId, clientSecret: args.dbClientSecret },
+                llm: llmConfig,
+            });
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        }
+        catch (error) {
+            return { content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: error instanceof Error ? error.message : String(error) }) }], isError: true };
+        }
     });
     // ═══════════════════════════════════════════════════════════════════════════
     // PROMPTS DE ORQUESTACIÓN

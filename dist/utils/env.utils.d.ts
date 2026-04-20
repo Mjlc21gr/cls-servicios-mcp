@@ -32,6 +32,9 @@ export declare const ENV_KEYS: {
     readonly REQUIRE_TESTS: "MCP_REQUIRE_TESTS";
     readonly MIN_TEST_COVERAGE: "MCP_MIN_TEST_COVERAGE";
     readonly API_BASE_URL: "MCP_API_BASE_URL";
+    readonly GEMINI_API_KEY: "GEMINI_API_KEY";
+    readonly DB_CLIENT_ID: "MCP_DB_CLIENT_ID";
+    readonly DB_CLIENT_SECRET: "MCP_DB_CLIENT_SECRET";
 };
 /**
  * Lee una variable de entorno. Retorna el default si no existe.

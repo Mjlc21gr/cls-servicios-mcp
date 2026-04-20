@@ -35,6 +35,10 @@ export const ENV_KEYS = {
     MIN_TEST_COVERAGE: 'MCP_MIN_TEST_COVERAGE',
     // API
     API_BASE_URL: 'MCP_API_BASE_URL',
+    // ML / LLM
+    GEMINI_API_KEY: 'GEMINI_API_KEY',
+    DB_CLIENT_ID: 'MCP_DB_CLIENT_ID',
+    DB_CLIENT_SECRET: 'MCP_DB_CLIENT_SECRET',
 };
 /** Valores por defecto cuando la variable no está definida */
 const ENV_DEFAULTS = {

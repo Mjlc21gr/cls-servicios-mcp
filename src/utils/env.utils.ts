@@ -41,6 +41,11 @@ export const ENV_KEYS = {
 
   // API
   API_BASE_URL: 'MCP_API_BASE_URL',
+
+  // ML / LLM
+  GEMINI_API_KEY: 'GEMINI_API_KEY',
+  DB_CLIENT_ID: 'MCP_DB_CLIENT_ID',
+  DB_CLIENT_SECRET: 'MCP_DB_CLIENT_SECRET',
 } as const;
 
 /** Valores por defecto cuando la variable no está definida */

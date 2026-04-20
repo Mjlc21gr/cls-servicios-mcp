@@ -1,0 +1,22 @@
+# Source
+src/
+tests/
+
+# Dev/Build
+.git/
+.vscode/
+.kiro/
+.cursor/
+.ml-backup/
+mcp-ml-optimizer/
+node_modules/
+
+# Config
+tsconfig.json
+vitest.config.*
+.eslintrc*
+.prettierrc*
+
+# Misc
+*.tgz
+.DS_Store

@@ -1,7 +1,11 @@
 {
   "mcpServers": {
     "cls-front-migrate": {
-      "url": "http://localhost:3100/mcp",
+      "command": "npx",
+      "args": ["-y", "-p", "@cls-bolivar/mcp-front-migrate@1.2.0", "cls-front-migrate"],
+      "env": {
+        "GEMINI_API_KEY": "AIzaSyCRaBZ3Gblr2qLP0c9LwVMQT9ND6n85USM"
+      },
       "disabled": false,
       "autoApprove": [
         "analyze_react_component",
@@ -12,7 +16,14 @@
         "convert_react_to_angular",
         "generate_microfrontend_shell",
         "generate_angular_module",
-        "validate_pipeline_config"
+        "validate_pipeline_config",
+        "run_migration_pipeline",
+        "migrate_full_project",
+        "migrate_react_to_angular",
+        "run_full_pipeline",
+        "ml_optimize",
+        "ml_classify_error",
+        "ml_status"
       ]
     }
   }

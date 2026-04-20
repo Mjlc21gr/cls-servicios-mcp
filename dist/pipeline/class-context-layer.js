@@ -19,10 +19,55 @@ export function validateClassContext(components) {
         const r1 = fixThisScope(ts);
         ts = r1.result;
         totalReport.thisFixCount += r1.fixCount;
+        // ─── RULE 0: Remove orphan signals from hook destructuring ───
+        // If component has inject() AND a signal<unknown>(undefined), remove the signal
+        // because it comes from hook destructuring and should use the injected service
+        if (ts.includes('inject(') && ts.includes('signal<unknown>(undefined)')) {
+            ts = ts.replace(/^\s*readonly\s+\w+\s*=\s*signal<unknown>\(undefined\);\s*$/gm, '');
+        }
         // ─── RULE 2: Consolidate duplicate identifiers ───
         const r2 = consolidateIdentifiers(ts);
+        // ─── RULE 2b: Fix template references to injected services ───
+        // When a hook like useServices() is converted to inject(ServicesService),
+        // the template still references the hook's return values directly.
+        // Fix: services.length → services.services().length, stats.x → services.stats().x
+        const injectMatches = [...ts.matchAll(/(\w+)\s*=\s*inject\((\w+)\)/g)];
+        for (const m of injectMatches) {
+            const injName = m[1]; // e.g., "services"
+            // Fix template: {{ injName.xxx }} → {{ injName.xxx }} (keep as-is for service properties)
+            // But: {{ injName.length }} → {{ injName.services().length }} if the service has a signal named same as inject
+            // Simpler: if template uses injName.length or [xxx]="injName", it means injName was an array in React
+            // In Angular, the array is injName.services() (signal on the service)
+            // Replace injName.length → injName.services().length
+            // Replace [services]="injName" → [services]="injName.services()"
+            html = html.replace(new RegExp(`\\b${injName}\\.length\\b`, 'g'), `${injName}.services().length`);
+            html = html.replace(new RegExp(`\\[services\\]="${injName}"`, 'g'), `[services]="${injName}.services()"`);
+            // Fix stats reference: stats.xxx → injName.stats().xxx
+            html = html.replace(/\bstats\.(\w+)/g, `${injName}.stats().$1`);
+            // Fix bare service method calls in TS: saveService( → this.injName.saveService(
+            // NOTE: applied after r2.result below
+        }
         ts = r2.result;
+        // Apply saveService fix after consolidateIdentifiers
+        for (const m of injectMatches) {
+            const injName = m[1];
+            ts = ts.replace(/(?<!this\.)(?<![.\w])\bsaveService\(/g, `this.${injName}.saveService(`);
+            // Cast unknown params to any for service calls
+            ts = ts.replace(/this\.(\w+)\.saveService\((\w+)\)/g, 'this.$1.saveService($2 as any)');
+        }
         totalReport.duplicatesRemoved += r2.removedCount;
+        // ─── RULE 2c: Add missing type imports ───
+        const typeNames = ['ServiceType', 'Service', 'ProviderStats'];
+        for (const typeName of typeNames) {
+            if (ts.includes(typeName) && !ts.includes(`import`) || !ts.match(new RegExp(`import.*\\b${typeName}\\b.*from`))) {
+                if (ts.includes(typeName)) {
+                    const hasImport = ts.match(new RegExp(`import.*\\b${typeName}\\b.*from`));
+                    if (!hasImport) {
+                        ts = `import type { ${typeName} } from '../../types';\n${ts}`;
+                    }
+                }
+            }
+        }
         // ─── RULE 3: Clean `: any` → `: unknown` ───
         ts = ts.replace(/:\s*any\b/g, ': unknown');
         ts = ts.replace(/<any>/g, '<unknown>');
@@ -86,7 +131,7 @@ function fixThisScope(ts) {
         // Fix: bare prop reads used as values in expressions (not in declarations)
         // Pattern: standalone prop used in comparisons, assignments, function args
         // e.g. "fallido === 'si'" → "this.fallido() === 'si'"
-        // e.g. "evidencias," → "this.evidencias(),"
+        // e.g. "this.evidencias," → "this.evidencias(),"
         // e.g. "[...evidencias," → "[...this.evidencias(),"
         // We target: bare prop NOT followed by ( or . or = (assignment) and NOT preceded by this. or readonly
         const bareReadRe = new RegExp(`(?<!this\\.)(?<!readonly\\s+)(?<![.\\w])\\b${prop}\\b(?!\\s*[(.=:])(?!\\s*=\\s*(?:signal|computed|inject|input|output|viewChild))`, 'g');
@@ -108,8 +153,9 @@ function fixThisScope(ts) {
             // Track brace depth to know when we're inside a method
             const openBraces = (line.match(/\{/g) || []).length;
             const closeBraces = (line.match(/\}/g) || []).length;
-            // Detect method start
-            if (!inMethodBody && /^\s+(?:async\s+)?\w+\s*\([^)]*\)\s*(?::\s*[^{]*)?\s*\{/.test(line)) {
+            // Detect method start (including arrow functions assigned to properties)
+            if (!inMethodBody && (/^\s+(?:async\s+)?\w+\s*\([^)]*\)\s*(?::\s*[^{]*)?\s*\{/.test(line) ||
+                /^\s+\w+\.\w+\s*=\s*(?:async\s+)?\(?/.test(line))) {
                 inMethodBody = true;
                 methodStartDepth = braceDepth;
             }
@@ -159,7 +205,25 @@ function consolidateIdentifiers(ts) {
         }
     }
     // Remove @Input() declarations that duplicate signal names
+    // BUT FIRST: Remove signals that duplicate @Input() names (Input takes priority for props)
+    const inputNames = new Set();
+    const inputScanRe = /@Input\(\)\s+(\w+)/g;
+    let im;
+    while ((im = inputScanRe.exec(result)) !== null) {
+        inputNames.add(im[1]);
+    }
+    for (const iName of inputNames) {
+        if (signalNames.has(iName)) {
+            // Remove the signal — the @Input takes priority
+            const sigRe = new RegExp(`\\s*(?:readonly\\s+)?${iName}\\s*=\\s*signal[^;]*;\\s*`, 'g');
+            result = result.replace(sigRe, '\n');
+            removedCount++;
+        }
+    }
+    // Remove @Input() declarations that duplicate signal names (only if signal should win)
     for (const name of signalNames) {
+        if (inputNames.has(name))
+            continue; // Already handled above — Input wins
         const inputRe = new RegExp(`\\s*@Input\\(\\)\\s+${name}[^;]*;\\s*`, 'g');
         const matches = result.match(inputRe);
         if (matches) {
@@ -174,6 +238,21 @@ function consolidateIdentifiers(ts) {
         if (vcMatches) {
             result = result.replace(viewChildRe, '\n');
             removedCount += vcMatches.length;
+        }
+    }
+    // Remove signals that collide with method names (ML patch)
+    const methodNames = new Set();
+    const methodScanRe = /^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]*)?\s*\{/gm;
+    let mm;
+    while ((mm = methodScanRe.exec(result)) !== null) {
+        if (!mm[1].startsWith('constructor'))
+            methodNames.add(mm[1]);
+    }
+    for (const mName of methodNames) {
+        if (signalNames.has(mName)) {
+            const sigLineRe = new RegExp(`\\s*(?:readonly\\s+)?${mName}\\s*=\\s*signal[^;]*;\\s*`, 'g');
+            result = result.replace(sigLineRe, '\n');
+            removedCount++;
         }
     }
     // Remove duplicate signal declarations (keep first)

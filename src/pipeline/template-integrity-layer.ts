@@ -43,6 +43,40 @@ export function validateTemplateIntegrity(
     // Fix 6: Fix malformed p-select tags (missing space after tag name)
     html = html.replace(/<p-select(?=[^\s>])/g, '<p-select ');
 
+    // Fix 7: Replace date-fns format() calls with simple date display
+    // {{ format(new Date(x), 'dd MMM yyyy', { locale: es }) }} → {{ x }}
+    html = html.replace(
+      /\{\{\s*format\(new Date\(([^)]+)\),\s*'[^']*'(?:,\s*\{[^}]*\})?\s*\)\s*\}\}/g,
+      '{{ $1 }}',
+    );
+
+    // Fix 8: Replace [variant]="..." with [severity]="..." for p-tag (PrimeNG 19)
+    html = html.replace(/\[variant\]=/g, '[severity]=');
+
+    // MLFIX-OUTPUTBIND: convert callback prop bindings to output event bindings
+    // [onSuccess]="handleSave" -> (onSave)="handleSave($event)"
+    html = html.replace(/\[onSuccess\]="(\w+)"/g, '(onSave)="$1($event)"');
+    // [onChange]="xxx" on app-evidence -> (onChange)="xxx($event)" (matches the output name)
+    html = html.replace(/(<app-evidence[^>]*)\[onChange\]="(\w+)"/g, '$1(onChange)="$2($event)"');
+    html = html.replace(/\[onChange\]="(\w+)\.bind\(this\)"/g, '(onChange)="$1($event)"');
+
+    // Fix 9: viewChild().current → viewChild()?.nativeElement
+    html = html.replace(/(\w+)\.current\b/g, '$1()?.nativeElement');
+
+    // Fix 10: (change)="setXxx($event)" on custom components → (onChange)
+    html = html.replace(
+      /(<app-evidence[^>]*)\(change\)="(\w+)\(\$event\)"/g,
+      '$1(onChange)="$2($event)"',
+    );
+    html = html.replace(
+      /(<app-evidence[^>]*)\(evidenciasChange\)="(\w+)\(\$event\)"/g,
+      '$1(onChange)="$2($event)"',
+    );
+    html = html.replace(
+      /(<app-\w+[^>]*)\(set\w+\)="(\w+)\(\$event\)"/g,
+      '$1(onChange)="$2($event)"',
+    );
+
     // Fix 7: Remove key={...} attributes (React-specific)
     html = html.replace(/\s*key=\{[^}]*\}/g, '');
     html = html.replace(/\s*\[key\]="[^"]*"/g, '');

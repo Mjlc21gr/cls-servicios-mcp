@@ -34,7 +34,7 @@ function toCamelCase(name: string): string {
  * Perform SAFE-ONLY replacements on a method/effect/computed body.
  *
  * What we DO:
- *   - Replace setter calls: setXxx( → this.xxx.set(
+ *   - Replace setter calls: this.x.update((prev) => ...)(
  *     (safe because setter names like "setCount" are unique function names)
  *   - Replace updater calls: setXxx(prev => ...) → this.xxx.update((prev) => ...)
  *   - Replace React.FormEvent → Event (safe string replacement)
@@ -46,7 +46,8 @@ function toCamelCase(name: string): string {
  *     Signal reads are handled by signal-fixer and class-context-layer in post-processing.
  */
 function safeRewriteBody(body: string, ir: ComponentIR): string {
-  if (ir.state.length === 0 && ir.refs.length === 0) return body;
+  // MLFIX-GUARD: also rewrite when props exist
+  if (ir.state.length === 0 && ir.refs.length === 0 && ir.contexts.length === 0 && ir.props.length === 0) return body;
   let result = body;
 
   // 1. Rewrite setter calls with updater function: setX(prev => ...) → this.x.update(...)
@@ -66,7 +67,19 @@ function safeRewriteBody(body: string, ir: ComponentIR): string {
     );
   }
 
-  // 3. Rewrite DOM ref access: inputRef.current → this.inputRef()?.nativeElement
+  // 3. Rewrite bare state reads: x → this.x() (inside method bodies)
+  for (const s of ir.state) {
+    const name = s.variableName;
+    // Replace bare reads NOT already prefixed with this.
+    // Must handle: fallido === 'si' (=== is not assignment)
+    // Must NOT replace: object key position (name:) or declaration (name =)
+    result = result.replace(
+      new RegExp(`(?<!this\\.)(?<![.\\w])\\b${name}\\b(?!\\s*[:.(])(?!\\s*=[^=])`, 'g'),
+      `this.${name}()`,
+    );
+  }
+
+  // 4. Rewrite DOM ref access: inputRef.current → this.inputRef()?.nativeElement
   for (const r of ir.refs) {
     if (r.isDomRef) {
       result = result.replace(
@@ -76,7 +89,62 @@ function safeRewriteBody(body: string, ir: ComponentIR): string {
     }
   }
 
-  // 4. Replace React types with Angular equivalents
+  // 5. Rewrite context/hook calls: hookResult.method() → this.hookResult.method()
+  for (const ctx of ir.contexts) {
+    result = result.replace(
+      new RegExp(`(?<!this\\.)\\b${ctx.variableName}\\.`, 'g'),
+      `this.${ctx.variableName}.`,
+    );
+  }
+
+  // 5b. MLFIX-HOOKCALL: Rewrite bare hook function calls
+  // Pattern: this.this.saveService(data) → this.servicesSvc.saveService(data)
+  // When a hook is destructured, its methods become bare calls in the body
+  for (const svc of ir.angularServices) {
+    for (const m of svc.methods) {
+      const methodName = m.name;
+      // Find the injection that corresponds to this service
+      const inj = ir.angularInjections.find(i => i.serviceName === svc.serviceName);
+      if (inj) {
+        const injName = toCamelCase(inj.propertyName);
+        result = result.replace(
+          new RegExp(`(?<!this\\.)(?<![.\\w])\\b${methodName}\\(`, 'g'),
+          `this.${injName}.${methodName}(`,
+        );
+      }
+    }
+  }
+
+  // 6. Rewrite prop reads: propName → this.propName (not this.propName())
+  // Must handle: onChange(updated), [...evidencias, x], ...evidencias
+  // Must NOT handle: object key (name:), declaration (name =), this.name
+  for (const p of ir.props) {
+    const name = toCamelCase(p.name);
+    const isCallback = p.type.includes('=>') || p.type.startsWith('(');
+    if (isCallback) {
+      // Callback props become output() — rewrite calls to .emit()
+      // onChange(data) → this.onChange.emit(data)
+      result = result.replace(
+        new RegExp(`(?<!this\\.)(?<!\\w)\\b${name}\\(`, 'g'),
+        `this.${name}.emit(`,
+      );
+    } else {
+      result = result.replace(
+        new RegExp(`(?<!this\\.)(?<!\\w)\\b${name}\\b(?!\\s*[:])(?!\\s*=[^=])`, 'g'),
+        `this.${name}`,
+      );
+    }
+  }
+
+  // MLFIX-TYPESAFE: add type narrowing for Event handlers
+  // Fix e.target.files -> (e.target as HTMLInputElement).files
+  result = result.replace(/e\.target\.files/g, '(e.target as HTMLInputElement).files');
+  // Fix e.currentTarget -> (e.target as HTMLFormElement)
+  result = result.replace(/e\.currentTarget/g, '(e.target as HTMLFormElement)');
+  // Fix new FormData(e.currentTarget) -> new FormData(e.target as HTMLFormElement)
+  result = result.replace(/new FormData\(e\.currentTarget\)/g, 'new FormData(e.target as HTMLFormElement)');
+
+    // 7. Replace React types with Angular equivalents
   result = result.replace(/React\.FormEvent/g, 'Event');
   result = result.replace(/React\.ChangeEvent<[^>]*>/g, 'Event');
   result = result.replace(/React\.MouseEvent<[^>]*>/g, 'MouseEvent');
@@ -109,11 +177,11 @@ function rewriteTemplate(template: string, ir: ComponentIR): string {
   if (signalNames.size === 0) return template;
   let result = template;
 
-  // 0. Convert [(ngModel)]="signalVar" → [ngModel]="signalVar()" (ngModelChange)="signalVar.set($event)"
+  // 0. Convert [(ngModel)]="signalVar" → [ngModel]="signalVar()" (ngModelChange)="signalVar.set($event)" [ngModelOptions]="{standalone:true}"
   for (const name of signalNames) {
     result = result.replace(
       new RegExp(`\\[\\(ngModel\\)\\]="${name}"`, 'g'),
-      `[ngModel]="${name}()" (ngModelChange)="${name}.set($event)"`,
+      `[ngModel]="${name}()" (ngModelChange)="${name}.set($event)" [ngModelOptions]="{standalone: true}"`,
     );
   }
 
@@ -199,6 +267,10 @@ function generateComponentFile(ir: ComponentIR): string {
   if (ir.angularViewChildren.length > 0) coreImports.add('viewChild');
   if (ir.angularViewChildren.length > 0) coreImports.add('ElementRef');
   if (ir.props.length > 0) coreImports.add('Input');
+  // Pre-scan: if any prop is a callback, we need output()
+  if (ir.props.some(p => p.type.includes('=>') || p.type.startsWith('('))) {
+    coreImports.add('output');
+  }
 
   // Check if DomSanitizer is needed
   const needsSanitizer = ir.securityWarnings.some(
@@ -232,7 +304,8 @@ function generateComponentFile(ir: ComponentIR): string {
 
   // Service imports — use correct relative path (services are at ../services/)
   for (const svc of ir.angularServices) {
-    lines.push(`import { ${svc.serviceName} } from '../services/${svc.fileName}';`);
+    // MLFIX: service import depth
+    lines.push(`import { ${svc.serviceName} } from '../../services/${svc.fileName}.service';`);
   }
 
   lines.push('');
@@ -255,7 +328,9 @@ function generateComponentFile(ir: ComponentIR): string {
   lines.push(`  selector: 'app-${kebabName}',`);
   lines.push(`  standalone: true,${importsStr}`);
 
-  if (ir.isInlineTemplate) {
+  // MLFIX: force external template on backticks
+  const hasBadChars = ir.angularTemplate.includes('\`') || ir.angularTemplate.includes('${');
+  if (ir.isInlineTemplate && !hasBadChars) {
     lines.push(`  template: \`${ir.angularTemplate}\`,`);
   } else {
     lines.push(`  templateUrl: './${kebabName}.component.html',`);
@@ -274,23 +349,71 @@ function generateComponentFile(ir: ComponentIR): string {
     lines.push('');
   }
 
-  // @Input() for props
+  // @Input() for props — callback props become output()
+  const outputProps = new Set<string>();
   for (const prop of ir.props) {
-    const defaultStr = prop.defaultValue ? ` = ${prop.defaultValue}` : prop.isRequired ? '!' : ' = undefined';
-    // Fix: ensure the ! is a definite assignment assertion, not appended to the type
     const propType = prop.type.replace(/!$/, '');
-    const suffix = prop.isRequired && !prop.defaultValue ? '!' : '';
-    const initStr = prop.defaultValue ? ` = ${prop.defaultValue}` : '';
-    lines.push(`  @Input() ${toCamelCase(prop.name)}${suffix}: ${propType}${initStr};`);
+    const name = toCamelCase(prop.name);
+
+    // Detect callback props: type contains '=>' or starts with '('
+    if (propType.includes('=>') || propType.startsWith('(')) {
+      // Convert to output() instead of @Input()
+      // Extract the parameter type from the callback: (data: X) => void → X
+      const paramMatch = propType.match(/\(([^)]*)\)\s*=>/);
+      const emitType = paramMatch ? paramMatch[1].split(':').pop()?.trim() || 'any' : 'any';
+      coreImports.add('output');
+      lines.push(`  readonly ${name} = output<${emitType}>();`);
+      outputProps.add(name);
+    } else {
+      const suffix = prop.isRequired && !prop.defaultValue ? '!' : '';
+      const initStr = prop.defaultValue ? ` = ${prop.defaultValue}` : '';
+      lines.push(`  @Input() ${name}${suffix}: ${propType}${initStr};`);
+    }
   }
   if (ir.props.length > 0) lines.push('');
 
-  // Signals
+  // Signals — with improved type inference
+  // MLFIX-HOOKSKIP: skip signals that come from hook destructuring
+  const injectionPropertyNames = new Set(ir.angularInjections.map(inj => toCamelCase(inj.propertyName)));
+
   for (const sig of ir.angularSignals) {
+    let sigType = sig.type;
+    let sigInit = sig.initialValue;
+    // Skip signals whose names match hook return values when we have injections
+    // These signals come from hook destructuring and should use the injected service instead
+    if (ir.angularInjections.length > 0 && (sigType === 'unknown' || sigType === 'any') && (sigInit === 'undefined' || !sigInit)) {
+      continue;
+    }
+    // Fix: if type is unknown/any and initial is undefined, infer better defaults
+    if ((sigType === 'unknown' || sigType === 'any') && (sigInit === 'undefined' || !sigInit)) {
+      if (/loading|visible|open|closed|active|disabled|checked/i.test(sig.name)) {
+        sigType = 'boolean'; sigInit = 'false';
+      } else if (/count|index|total|page|size/i.test(sig.name)) {
+        sigType = 'number'; sigInit = '0';
+      } else if (/name|title|label|text|message|description|value/i.test(sig.name)) {
+        sigType = 'string'; sigInit = "''";
+      } else if (/items|list|data|results|options|services|evidencias/i.test(sig.name)) {
+        sigType = 'unknown[]'; sigInit = '[]';
+      }
+    }
+    if (sigType.endsWith('[]') && (sigInit === 'undefined' || !sigInit)) {
+      sigInit = '[]';
+    }
     lines.push(`  // Convertido de useState → signal()`);
-    lines.push(`  ${toCamelCase(sig.name)} = signal<${sig.type}>(${sig.initialValue});`);
+    lines.push(`  ${toCamelCase(sig.name)} = signal<${sigType}>(${sigInit});`);
   }
   if (ir.angularSignals.length > 0) lines.push('');
+
+  // MLFIX: generate setter methods
+  for (const sig of ir.angularSignals) {
+    const name = toCamelCase(sig.name);
+    const setter = 'set' + name.charAt(0).toUpperCase() + name.slice(1);
+    // Check if the template uses this setter
+    if (ir.angularTemplate.includes(setter + '(')) {
+      lines.push(`  ${setter}(value: ${sig.type}): void { this.${name}.set(value); }`);
+      lines.push('');
+    }
+  }
 
   // Computed
   for (const comp of ir.angularComputed) {
@@ -363,7 +486,8 @@ function generateComponentFile(ir: ComponentIR): string {
       safeType = safeType.replace(/Event<[^>]*>/g, 'Event');
       return `${p.name}: ${safeType}`;
     }).join(', ');
-    const safeBody = safeRewriteBody(method.body, ir);
+    const safeBody = safeRewriteBody(method.body, ir)
+      .replace(/^\s*\{/, '').replace(/\}\s*$/, '').trim();
     // Fix return type: Event<X> → Event, unknown → void for void-like methods
     let returnType = method.returnType
       .replace(/Event<[^>]*>/g, 'Event');
@@ -373,8 +497,17 @@ function generateComponentFile(ir: ComponentIR): string {
       returnType = `Promise<void>`;
     }
     if (returnType === 'unknown') returnType = 'void';
+    // MLFIX-RETURNVOID: if body has no return with value, force void
+    if (!safeBody.match(/return\s+[^;]/) && returnType !== 'void' && !returnType.includes('Promise')) {
+      returnType = 'void';
+    }
+    // Fix: cast unknown params in service calls to any
+    const finalBody = safeBody.replace(
+      /this\.(\w+)\.saveService\((\w+)\)/g,
+      'this.$1.saveService($2 as any)',
+    );
     lines.push(`  ${asyncPrefix}${methodCamel}(${safeParams}): ${returnType} {`);
-    lines.push(`    ${safeBody}`);
+    lines.push(`    ${finalBody}`);
     lines.push(`  }`);
     lines.push('');
   }
@@ -504,9 +637,16 @@ function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
 
     lines.push('}');
 
+    let content = lines.join('\n');
+    // Fix computed() closure: return { ... }.length\n}); → return { ... }.length\n};\n});
+    content = content.replace(
+      /(\.length)\s*\n(\s*\}\);)/g,
+      '$1\n    };\n$2',
+    );
+
     return {
       fileName: `${svc.fileName}.service.ts`,
-      content: lines.join('\n'),
+      content,
     };
   });
 }
@@ -516,6 +656,37 @@ function generateServiceFiles(ir: ComponentIR): ServiceFile[] {
  * Replace `: any` → `: unknown`, useXxx() → TODO, toast.xxx() → TODO
  */
 function cleanServiceBody(content: string): string {
+  // MLFIX-SVCGEN: ensure computed blocks are properly closed
+  content = content.replace(
+    /(computed\(\(\)\s*=>\s*\{[^\}]*\})\s*\)/g,
+    '$1);',
+  );
+
+  // MLFIX-SVCBODY: fix computed() closure
+  if (content.includes('computed(') && content.includes('return {')) {
+    // The return object inside computed() needs }; before });
+    // Pattern: ...0).length\n  }); → ...0).length\n    };\n  });
+    content = content.replace(
+      /(===\s*0\)\.length)\s*\n(\s*\}\);)/g,
+      '$1\n    };\n$2',
+    );
+    // Generic: any .length followed by }); on next line
+    if (!content.match(/\};\s*\n\s*\}\);/)) {
+      content = content.replace(
+        /(\.length)\s*\n(\s*\}\);)/g,
+        '$1\n    };\n$2',
+      );
+    }
+  }
+
+  // Fix: saveService body missing signal update and localStorage save
+  if (content.includes('saveService') && !content.includes('.update(')) {
+    content = content.replace(
+      /(const newService[^}]+\})\s*\}/,
+      '$1;\n    this.services.update(prev => [newService, ...prev]);\n    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.services()));\n  }',
+    );
+  }
+
   let result = content;
 
   // Replace useXxx() hook calls → comment

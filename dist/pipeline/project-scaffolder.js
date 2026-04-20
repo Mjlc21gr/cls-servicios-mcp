@@ -124,6 +124,7 @@ function generateAngularJson(moduleName) {
                             outputPath: `dist/${projectName}`,
                             index: 'src/index.html',
                             browser: 'src/main.ts',
+                            polyfills: ['zone.js'],
                             tsConfig: 'tsconfig.app.json',
                             styles: [
                                 'src/styles.scss',
@@ -293,7 +294,12 @@ function generateIndexHtml(moduleName) {
 // src/styles.scss
 // ---------------------------------------------------------------------------
 function generateStylesScss() {
-    return `/* PrimeNG 19 uses preset themes via providePrimeNG() in app.config.ts */
+    return `/* Tailwind CSS */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* PrimeNG 19 uses preset themes via providePrimeNG() in app.config.ts */
 /* Only primeicons CSS is needed as a direct import */
 
 /* Seguros Bolívar Design System theme */

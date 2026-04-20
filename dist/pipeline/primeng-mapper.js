@@ -17,7 +17,7 @@ const PRIMENG_IMPORT_MAP = {
 // Replacement helpers
 // ---------------------------------------------------------------------------
 /**
- * Replace `<button ...>...</button>` with `<p-button ...>...</p-button>`.
+ * Replace `<p-button ...>...</button>` with `<p-button ...>...</p-button>`.
  * Handles self-closing `<button ... />` as well.
  */
 function replaceButton(template) {
@@ -28,7 +28,7 @@ function replaceButton(template) {
     return template;
 }
 /**
- * Replace `<input type="text" ...>` and `<input ... />` (text inputs) with
+ * Replace `<input pInputText ...>` and `<input ... />` (text inputs) with
  * `<input pInputText ...>`. Only targets inputs with type="text" or inputs
  * without an explicit type (default is text). Does NOT touch checkbox inputs.
  */

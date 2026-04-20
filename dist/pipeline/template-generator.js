@@ -131,8 +131,19 @@ function renderAttribute(attr) {
     }
     // --- Other dynamic attributes → [attrName]="expr" ---
     if (attr.isDynamic) {
+        // Skip Framer Motion attributes that have no Angular equivalent
+        const FRAMER_ATTRS = new Set(['initial', 'animate', 'exit', 'transition', 'whileHover', 'whileTap', 'whileInView', 'variants', 'layout', 'layoutId']);
+        if (FRAMER_ATTRS.has(attr.name)) {
+            return { text: '' }; // Strip completely
+        }
+        // Skip React-only attributes
+        if (attr.name === 'key' || attr.name === 'ref') {
+            return { text: '' };
+        }
+        // MLFIX-QUOTES: escape double quotes inside binding values to single quotes
+        const safeValue = value.replace(/(?<=\s)"([^"]*)"(?=\s|$)/g, "'$1'");
         return {
-            text: `[${attr.name}]="${value}"`,
+            text: `[${attr.name}]="${safeValue}"`,
             binding: {
                 type: 'property',
                 angularSyntax: `[${attr.name}]`,
@@ -141,6 +152,10 @@ function renderAttribute(attr) {
         };
     }
     // --- Static attributes ---
+    // Skip React-only and Framer Motion static attributes
+    if (['key', 'ref', 'mode'].includes(attr.name)) {
+        return { text: '' };
+    }
     return { text: `${attr.name}="${value}"` };
 }
 // ---------------------------------------------------------------------------
@@ -188,11 +203,19 @@ function renderExpression(expr, bindings, indent) {
             return `${indent}@if (${expr.expression}) {\n${trueHtml}\n${indent}} @else {\n${falseHtml}\n${indent}}`;
         }
         case 'map': {
-            // {arr.map(x => <X/>)} → @for (item of expr; track item) { <X/> }
-            const bodyHtml = (expr.children ?? [])
+            // expression format: "collection::paramName::indexName" or "collection::paramName" or "collection"
+            const parts = expr.expression.split('::');
+            const collectionExpr = parts[0];
+            const loopVar = parts[1] || 'item';
+            const indexVar = parts[2] || '';
+            let bodyHtml = (expr.children ?? [])
                 .map((c) => renderChild(c, bindings, indent + '  '))
                 .join('\n');
-            return `${indent}@for (item of ${expr.expression}; track item) {\n${bodyHtml}\n${indent}}`;
+            // Replace React index variable with Angular $index
+            if (indexVar) {
+                bodyHtml = bodyHtml.replace(new RegExp(`\\b${indexVar}\\b`, 'g'), '$index');
+            }
+            return `${indent}@for (${loopVar} of ${collectionExpr}; track ${loopVar}) {\n${bodyHtml}\n${indent}}`;
         }
         case 'switch': {
             // switch/multiple conditions → @switch (expr) { @case ... }

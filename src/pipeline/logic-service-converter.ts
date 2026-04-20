@@ -40,7 +40,13 @@ export function convertHookToService(
   const analysis = analyzeHookBody(hookBody);
 
   // Generate the Angular service
-  const content = generateServiceContent(className, analysis, typesContent, source);
+  let content = generateServiceContent(className, analysis, typesContent, source);
+
+  // Fix computed() closure: .length\n  }); → .length\n    };\n  });
+  content = content.replace(
+    /(\.length)\s*\n(\s*\}\);)/g,
+    '$1\n    };\n$2',
+  );
 
   return { fileName, className, content };
 }

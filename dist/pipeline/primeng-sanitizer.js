@@ -24,7 +24,7 @@ const IMPORT_PATH_MIGRATIONS = new Map([
 const MODULE_NAME_MIGRATIONS = new Map([
     ['DropdownModule', 'Select'],
     ['SelectModule', 'Select'],
-    ['ButtonModule', 'ButtonDirective'],
+    ['ButtonModule', 'Button'],
     ['InputTextModule', 'InputText'],
     ['InputTextareaModule', 'Textarea'],
     ['CheckboxModule', 'Checkbox'],

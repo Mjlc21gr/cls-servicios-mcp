@@ -241,6 +241,114 @@ function ensureFormsModuleImport(componentTs: string, html: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Fix 6b: Ensure PrimeNG components used in template are in imports array
+// ---------------------------------------------------------------------------
+
+const PRIMENG_TAG_TO_IMPORT: Record<string, { name: string; path: string }> = {
+  'p-card': { name: 'Card', path: 'primeng/card' },
+  'p-button': { name: 'Button', path: 'primeng/button' },
+  'p-select': { name: 'Select', path: 'primeng/select' },
+  'p-toast': { name: 'Toast', path: 'primeng/toast' },
+  'p-tag': { name: 'Tag', path: 'primeng/tag' },
+  'p-dialog': { name: 'Dialog', path: 'primeng/dialog' },
+  'p-table': { name: 'Table', path: 'primeng/table' },
+  'p-inputSwitch': { name: 'InputSwitch', path: 'primeng/inputswitch' },
+  'p-checkbox': { name: 'Checkbox', path: 'primeng/checkbox' },
+  'p-progressSpinner': { name: 'ProgressSpinner', path: 'primeng/progressspinner' },
+  'p-progressBar': { name: 'ProgressBar', path: 'primeng/progressbar' },
+  'p-menu': { name: 'Menu', path: 'primeng/menu' },
+  'p-menubar': { name: 'Menubar', path: 'primeng/menubar' },
+  'p-sidebar': { name: 'Sidebar', path: 'primeng/sidebar' },
+  'p-accordion': { name: 'Accordion', path: 'primeng/accordion' },
+  'p-tabView': { name: 'TabView', path: 'primeng/tabview' },
+  'p-toolbar': { name: 'Toolbar', path: 'primeng/toolbar' },
+  'p-divider': { name: 'Divider', path: 'primeng/divider' },
+  'p-message': { name: 'Message', path: 'primeng/message' },
+  'p-image': { name: 'Image', path: 'primeng/image' },
+  'p-avatar': { name: 'Avatar', path: 'primeng/avatar' },
+  'p-badge': { name: 'Badge', path: 'primeng/badge' },
+  'p-chip': { name: 'Chip', path: 'primeng/chip' },
+  'p-skeleton': { name: 'Skeleton', path: 'primeng/skeleton' },
+  'p-panel': { name: 'Panel', path: 'primeng/panel' },
+  'p-fieldset': { name: 'Fieldset', path: 'primeng/fieldset' },
+  'p-steps': { name: 'Steps', path: 'primeng/steps' },
+  'p-paginator': { name: 'Paginator', path: 'primeng/paginator' },
+  'p-confirmdialog': { name: 'ConfirmDialog', path: 'primeng/confirmdialog' },
+  'p-overlayPanel': { name: 'OverlayPanel', path: 'primeng/overlaypanel' },
+  'p-fileUpload': { name: 'FileUpload', path: 'primeng/fileupload' },
+  'p-carousel': { name: 'Carousel', path: 'primeng/carousel' },
+  'p-timeline': { name: 'Timeline', path: 'primeng/timeline' },
+  'p-dataView': { name: 'DataView', path: 'primeng/dataview' },
+  'p-listbox': { name: 'Listbox', path: 'primeng/listbox' },
+  'p-tree': { name: 'Tree', path: 'primeng/tree' },
+  'p-autoComplete': { name: 'AutoComplete', path: 'primeng/autocomplete' },
+  'p-calendar': { name: 'DatePicker', path: 'primeng/datepicker' },
+  'p-speedDial': { name: 'SpeedDial', path: 'primeng/speeddial' },
+};
+
+function ensurePrimeNgImports(componentTs: string, html: string): string {
+  let result = componentTs;
+
+  for (const [tag, info] of Object.entries(PRIMENG_TAG_TO_IMPORT)) {
+    // Check if the tag is used in the template
+    if (!html.includes(`<${tag}`) && !html.includes(`</${tag}`)) continue;
+
+    // Check if already in @Component imports array (not just TS import)
+    const importsArrayMatch = result.match(/imports\s*:\s*\[([^\]]*)\]/);
+    const importsArray = importsArrayMatch ? importsArrayMatch[1] : '';
+    if (importsArray.includes(info.name)) continue;
+
+    // Add TS import statement if not present
+    if (!result.includes(`import { ${info.name} }`) && !result.match(new RegExp(`import\\s*\\{[^}]*\\b${info.name}\\b[^}]*\\}`))) {
+      result = `import { ${info.name} } from '${info.path}';\n${result}`;
+    }
+
+    // Add to @Component imports array
+    const hasImportsArray = result.match(/imports\s*:\s*\[/);
+    if (hasImportsArray) {
+      result = result.replace(
+        /(imports\s*:\s*\[)([^\]]*?)(\])/,
+        (_m, open: string, existing: string, close: string) => {
+          const trimmed = existing.trim();
+          if (trimmed.includes(info.name)) return `${open}${existing}${close}`;
+          return trimmed
+            ? `${open}${existing.trimEnd()}, ${info.name}${close}`
+            : `${open}${info.name}${close}`;
+        },
+      );
+    } else {
+      // No imports array — add one after standalone: true
+      result = result.replace(
+        /(standalone\s*:\s*true\s*,)/,
+        `$1\n  imports: [${info.name}],`,
+      );
+    }
+  }
+
+  // If p-toast is used, also add MessageService as provider
+  if (html.includes('<p-toast') || html.includes('</p-toast')) {
+    if (!result.includes('MessageService')) {
+      result = `import { MessageService } from 'primeng/api';\n${result}`;
+      if (result.includes('providers:')) {
+        result = result.replace(
+          /(providers\s*:\s*\[)([^\]]*?)(\])/,
+          (_m, open: string, existing: string, close: string) => {
+            return existing.includes('MessageService') ? `${open}${existing}${close}` : `${open}${existing.trimEnd()}, MessageService${close}`;
+          },
+        );
+      } else {
+        result = result.replace(
+          /(standalone\s*:\s*true\s*,)/,
+          `$1\n  providers: [MessageService],`,
+        );
+      }
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Fix 6: Ensure child components used in template are in imports array
 // ---------------------------------------------------------------------------
 
@@ -377,6 +485,9 @@ export function fixSignals(
 
     // Fix 6: Ensure child components used in template are imported
     componentTs = ensureChildComponentImports(componentTs, componentHtml, components);
+
+    // Fix 6b: Ensure PrimeNG components used in template are imported
+    componentTs = ensurePrimeNgImports(componentTs, componentHtml);
 
     // Fix 7: Ensure p-button with type="submit" is inside <form>, not in ng-template pTemplate="footer"
     componentHtml = fixSubmitButtonPlacement(componentHtml);

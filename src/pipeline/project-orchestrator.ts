@@ -2,7 +2,7 @@
 // Pipeline_Orchestrator — Top-level coordinator for full project migration
 // =============================================================================
 
-import { existsSync, mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, copyFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 import type {
@@ -37,7 +37,7 @@ import { preserveStyles } from './style-preservator.js';
 import { validateClassContext } from './class-context-layer.js';
 import { validateTemplateIntegrity } from './template-integrity-layer.js';
 import { validateOutput } from './output-validator.js';
-import { toKebabCase } from '../utils/naming.utils.js';
+import { toKebabCase, toPascalCase } from '../utils/naming.utils.js';
 
 // ---------------------------------------------------------------------------
 // Topological sort (Kahn's algorithm)
@@ -320,6 +320,12 @@ export async function migrateFullProject(
     // Step 7: Generate routes (Universal Router Mapper)
     // -----------------------------------------------------------------------
     const routesContent = detectAndGenerateRoutes(scannedProject, transformedComponents, moduleName);
+    // Fix: rename AppComponent in routes to avoid collision with root
+    const featureClassName = toPascalCase(moduleName) + 'Component';
+    const fixedRoutesContent = routesContent.replace(
+      /\.then\(m => m\.AppComponent\)/g,
+      `.then(m => m.${featureClassName})`,
+    );
 
     // -----------------------------------------------------------------------
     // Step 8: Fix signals
@@ -355,13 +361,27 @@ export async function migrateFullProject(
     const moduleKebab = toKebabCase(moduleName);
     for (const [, comp] of integrityValidated) {
       const compDir = `src/app/features/${moduleKebab}/components/${comp.kebabName}`;
-      allFiles.set(`${compDir}/${comp.kebabName}.component.ts`, comp.componentTs);
+      let compTs = comp.componentTs;
+
+      // Fix: Rename feature AppComponent to avoid collision with root AppComponent
+      if (comp.kebabName === 'app' && compTs.includes('export class AppComponent')) {
+        const featureClassName = toPascalCase(moduleName) + 'Component';
+        compTs = compTs.replace(/export class AppComponent/g, `export class ${featureClassName}`);
+      }
+
+      allFiles.set(`${compDir}/${comp.kebabName}.component.ts`, compTs);
       allFiles.set(`${compDir}/${comp.kebabName}.component.html`, comp.componentHtml);
       allFiles.set(
         `${compDir}/${comp.kebabName}.component.scss`,
         styleResult.componentStyles.get(comp.componentName) || comp.componentScss || generateDefaultScss(comp.kebabName),
       );
-      allFiles.set(`${compDir}/${comp.kebabName}.component.spec.ts`, comp.componentSpec);
+      // Fix spec file to use renamed class
+      let specContent = comp.componentSpec;
+      if (comp.kebabName === 'app' && specContent.includes('AppComponent')) {
+        const featureClassName2 = toPascalCase(moduleName) + 'Component';
+        specContent = specContent.replace(/AppComponent/g, featureClassName2);
+      }
+      allFiles.set(`${compDir}/${comp.kebabName}.component.spec.ts`, specContent);
 
       // Services at src/app/features/{moduleName}/services/
       for (const svc of comp.services) {
@@ -373,9 +393,17 @@ export async function migrateFullProject(
     }
 
     // -----------------------------------------------------------------------
+    // MLFIX-TYPESCOPY: read source types.ts
+    let sourceTypesContent = '';
+    const srcTypesFile = join(params.sourceDir, 'src', 'types.ts');
+    if (existsSync(srcTypesFile)) {
+      sourceTypesContent = readFileSync(srcTypesFile, 'utf-8');
+    }
+
     // Step 10b: Bug 4 Fix — Generate types.ts if components import from it
     // -----------------------------------------------------------------------
-    let needsTypesFile = false;
+    // MLFIX-TYPES: always generate types.ts
+    let needsTypesFile = true;  // ML: force types.ts generation
     for (const [, content] of allFiles) {
       if (/import\s+.*from\s+['"].*types['"]/g.test(content)) {
         needsTypesFile = true;
@@ -405,7 +433,7 @@ export async function migrateFullProject(
         }
       }
       const typesContent = typeInterfaces.length > 0
-        ? `// Auto-generated types from React project migration\n\n${typeInterfaces.join('\n\n')}\n`
+        ? sourceTypesContent + `\n// Auto-generated types from React project migration\n\n${typeInterfaces.join('\n\n')}\n`
         : `// Auto-generated types placeholder\n// Add your shared interfaces and types here\nexport {};\n`;
       // Place types.ts at the feature module level
       allFiles.set(`src/app/features/${moduleKebab}/types.ts`, typesContent);
@@ -429,10 +457,11 @@ export async function migrateFullProject(
     allFiles.set('src/styles/_sb-primeng-theme.scss', styleResult.themeFile);
 
     // Routes at src/app/app.routes.ts
-    allFiles.set('src/app/app.routes.ts', routesContent);
+    allFiles.set('src/app/app.routes.ts', fixedRoutesContent);
 
-    // Global styles at src/styles.scss
-    allFiles.set('src/styles.scss', styleResult.globalStyles);
+    // Global styles at src/styles.scss — prepend Tailwind directives
+    const tailwindDirectives = `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n\n`;
+    allFiles.set('src/styles.scss', tailwindDirectives + styleResult.globalStyles);
 
     // -----------------------------------------------------------------------
     // Step 11: Write all files to outputDir
@@ -476,7 +505,7 @@ export async function migrateFullProject(
       componentsMigrated: integrityValidated.size,
       componentsFailed,
       servicesGenerated,
-      routesGenerated: (routesContent.match(/loadComponent/g) ?? []).length,
+      routesGenerated: (fixedRoutesContent.match(/loadComponent/g) ?? []).length,
       stylesGenerated: styleResult.componentStyles.size,
       staticAssetsCopied,
     };

@@ -1,0 +1,13 @@
+[project]
+name = "mcp-ml-optimizer"
+version = "2.0.0"
+description = "ML optimizer that reads errors from PostgreSQL and patches the MCP"
+requires-python = ">=3.11"
+dependencies = [
+    "scikit-learn>=1.4.0",
+    "numpy>=1.26.0",
+    "psycopg2-binary>=2.9.0",
+]
+
+[project.scripts]
+mcp-optimizer = "mcp_ml_optimizer.main:main"

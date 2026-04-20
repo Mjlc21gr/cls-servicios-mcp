@@ -301,9 +301,26 @@ function convertJSXExpression(
       }
     }
 
+    // Extract map callback parameter name for @for loop variable
+    let mapParamName = 'item';
+    let mapIndexName = '';
+    if (mapCallback && (mapCallback.type === 'ArrowFunctionExpression' || mapCallback.type === 'FunctionExpression')) {
+      const firstParam = mapCallback.params?.[0];
+      if (firstParam?.type === 'Identifier') {
+        mapParamName = firstParam.name;
+      }
+      const secondParam = mapCallback.params?.[1];
+      if (secondParam?.type === 'Identifier') {
+        mapIndexName = secondParam.name;
+      }
+    }
+
     return {
       type: 'map',
-      expression: arrayExpr,
+      // Encode: "collection::paramName::indexName"
+      expression: mapIndexName
+        ? `${arrayExpr}::${mapParamName}::${mapIndexName}`
+        : `${arrayExpr}::${mapParamName}`,
       children: children.length > 0 ? children : undefined,
     };
   }

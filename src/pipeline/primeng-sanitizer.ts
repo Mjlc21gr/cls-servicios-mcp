@@ -31,7 +31,7 @@ const IMPORT_PATH_MIGRATIONS: ReadonlyMap<string, string> = new Map([
 const MODULE_NAME_MIGRATIONS: ReadonlyMap<string, string> = new Map([
   ['DropdownModule', 'Select'],
   ['SelectModule', 'Select'],
-  ['ButtonModule', 'ButtonDirective'],
+  ['ButtonModule', 'Button'],
   ['InputTextModule', 'InputText'],
   ['InputTextareaModule', 'Textarea'],
   ['CheckboxModule', 'Checkbox'],

@@ -92,22 +92,39 @@ function generateComponentTs(
 ): string {
   const serviceName = `${toPascalCase(moduleName)}Service`;
   const serviceFile = toKebabCase(moduleName);
+  const serviceInstanceName = `${toCamelCase(moduleName)}Service`; // P4 FIX: consistent name
   const hasService = referencedFunctions.length > 0;
   const hasForms = template.formElements.length > 0;
+  const hasAsync = template.scriptRunCalls.length > 0;
 
   const angularImports = buildAngularImports(template, hasService);
-  const componentImports = buildComponentImports(hasForms);
+  const componentImports = buildComponentImports(hasForms, template);
 
   const signals = buildSignalsFromTemplate(template);
-  const methods = buildMethodsFromScriptRun(template, referencedFunctions);
+  const methods = buildMethodsFromScriptRun(template, referencedFunctions, serviceInstanceName);
   const formSetup = hasForms ? buildFormSetup(template) : '';
 
+  // P7 FIX: correct relative path from components/{name}/ to services/
   const serviceImport = hasService
-    ? `import { ${serviceName} } from '../services/${serviceFile}.service';\n`
+    ? `import { ${serviceName} } from '../../services/${serviceFile}.service';\n`
     : '';
   const serviceInjection = hasService
-    ? `  private readonly ${toCamelCase(moduleName)}Service = inject(${serviceName});\n`
+    ? `  private readonly ${serviceInstanceName} = inject(${serviceName});\n`
     : '';
+
+  // P3 FIX: generate onSubmit if template has forms
+  const onSubmitMethod = hasForms
+    ? `\n  onSubmit(): void {\n    // TODO: implementar lógica de envío\n  }\n`
+    : '';
+
+  // Ensure loading/error signals exist if template uses async or forms with loading
+  let extraSignals = '';
+  if ((hasAsync || hasForms) && !signals.includes('loading')) {
+    extraSignals += '  readonly loading = signal(false);\n';
+  }
+  if (hasAsync && !signals.includes('error')) {
+    extraSignals += '  readonly error = signal<string | null>(null);\n';
+  }
 
   return `${angularImports}
 ${serviceImport}
@@ -120,7 +137,7 @@ ${serviceImport}
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ${componentName}Component {
-${serviceInjection}${signals}${formSetup}${methods}
+${serviceInjection}${extraSignals}${signals}${formSetup}${methods}${onSubmitMethod}
 }
 `;
 }
@@ -138,7 +155,7 @@ function generateMainComponentTs(
     analysis.externalApiCalls.length > 0;
 
   const serviceImport = hasService
-    ? `import { ${serviceName} } from '../services/${serviceFile}.service';\n`
+    ? `import { ${serviceName} } from '../../services/${serviceFile}.service';\n`
     : '';
   const serviceInjection = hasService
     ? `  private readonly ${toCamelCase(moduleName)}Service = inject(${serviceName});\n`
@@ -186,13 +203,84 @@ function buildAngularImports(template: HtmlTemplate, hasService: boolean): strin
     lines.push(`import { FormsModule, ReactiveFormsModule } from '@angular/forms';`);
   }
 
+  // P3 FIX: Import PrimeNG modules based on what the template uses
+  const primeNgImports = detectPrimeNgImports(template);
+  for (const imp of primeNgImports) {
+    lines.push(imp);
+  }
+
   return lines.join('\n');
 }
 
-function buildComponentImports(hasForms: boolean): string {
+/**
+ * P3 FIX: Detect PrimeNG components used in the template and return import statements.
+ */
+function detectPrimeNgImports(template: HtmlTemplate): string[] {
+  const imports: string[] = [];
+  const hasAsync = template.scriptRunCalls.length > 0;
+  const hasForms = template.formElements.length > 0;
+
+  if (hasAsync) {
+    imports.push(`import { ProgressSpinnerModule } from 'primeng/progressspinner';`);
+    imports.push(`import { MessageModule } from 'primeng/message';`);
+  }
+
+  if (hasForms) {
+    imports.push(`import { ButtonModule } from 'primeng/button';`);
+    imports.push(`import { InputTextModule } from 'primeng/inputtext';`);
+
+    const hasDropdown = template.formElements.some((el) => el.tag === 'select');
+    const hasTextarea = template.formElements.some((el) => el.tag === 'textarea');
+    const hasCheckbox = template.formElements.some((el) => el.type === 'checkbox');
+    const hasCalendar = template.formElements.some((el) => el.type === 'date' || el.type === 'datetime-local');
+    const hasNumber = template.formElements.some((el) => el.type === 'number');
+
+    if (hasDropdown) imports.push(`import { DropdownModule } from 'primeng/dropdown';`);
+    if (hasTextarea) imports.push(`import { InputTextareaModule } from 'primeng/inputtextarea';`);
+    if (hasCheckbox) imports.push(`import { CheckboxModule } from 'primeng/checkbox';`);
+    if (hasCalendar) imports.push(`import { CalendarModule } from 'primeng/calendar';`);
+    if (hasNumber) imports.push(`import { InputNumberModule } from 'primeng/inputnumber';`);
+  }
+
+  return imports;
+}
+
+function buildComponentImports(hasForms: boolean, template?: HtmlTemplate): string {
   const imports = ['CommonModule'];
   if (hasForms) imports.push('FormsModule', 'ReactiveFormsModule');
+
+  if (template) {
+    const hasAsync = template.scriptRunCalls.length > 0;
+    if (hasAsync) {
+      imports.push('ProgressSpinnerModule', 'MessageModule');
+    }
+    if (hasForms) {
+      imports.push('ButtonModule', 'InputTextModule');
+      if (template.formElements.some((el) => el.tag === 'select')) imports.push('DropdownModule');
+      if (template.formElements.some((el) => el.tag === 'textarea')) imports.push('InputTextareaModule');
+      if (template.formElements.some((el) => el.type === 'checkbox')) imports.push('CheckboxModule');
+      if (template.formElements.some((el) => el.type === 'date' || el.type === 'datetime-local')) imports.push('CalendarModule');
+      if (template.formElements.some((el) => el.type === 'number')) imports.push('InputNumberModule');
+    }
+  }
+
   return imports.join(', ');
+}
+
+// ---------------------------------------------------------------------------
+// Sanitize identifier — P1 FIX: remove ${...} and invalid chars
+// ---------------------------------------------------------------------------
+
+function sanitizeIdentifier(name: string): string {
+  // Remove template literals like ${i}, ${row.id}, ${campo.icon}, etc.
+  let clean = name.replace(/\$\{[^}]*\}/g, '');
+  // Remove any remaining invalid identifier chars
+  clean = clean.replace(/[^a-zA-Z0-9_]/g, '');
+  // Ensure it doesn't start with a number
+  if (/^\d/.test(clean)) clean = `field${clean}`;
+  // Ensure it's not empty
+  if (!clean) clean = 'field';
+  return clean;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,16 +289,26 @@ function buildComponentImports(hasForms: boolean): string {
 
 function buildSignalsFromTemplate(template: HtmlTemplate): string {
   const lines: string[] = [];
+  const seen = new Set<string>(); // P2 FIX: deduplicate
 
   // Signals para variables de scriptlets
   for (const varName of template.scriptletVariables) {
-    lines.push(`  readonly ${toCamelCase(varName)} = signal<unknown>(null);`);
+    const safeName = sanitizeIdentifier(toCamelCase(varName));
+    if (seen.has(safeName)) continue;
+    seen.add(safeName);
+    lines.push(`  readonly ${safeName} = signal<unknown>(null);`);
   }
 
   // Signal de loading y error para llamadas async
   if (template.scriptRunCalls.length > 0) {
-    lines.push(`  readonly loading = signal(false);`);
-    lines.push(`  readonly error = signal<string | null>(null);`);
+    if (!seen.has('loading')) {
+      seen.add('loading');
+      lines.push(`  readonly loading = signal(false);`);
+    }
+    if (!seen.has('error')) {
+      seen.add('error');
+      lines.push(`  readonly error = signal<string | null>(null);`);
+    }
   }
 
   return lines.length > 0 ? '\n' + lines.join('\n') + '\n' : '';
@@ -222,12 +320,18 @@ function buildSignalsFromTemplate(template: HtmlTemplate): string {
 
 function buildFormSetup(template: HtmlTemplate): string {
   const lines: string[] = ['\n  // Form signals'];
+  const seen = new Set<string>(); // P2 FIX: deduplicate
 
   for (const el of template.formElements) {
-    const name = el.name || el.id || `field_${template.formElements.indexOf(el)}`;
+    const rawName = el.name || el.id || `field_${template.formElements.indexOf(el)}`;
+    // P1 FIX: skip entries with unresolved template literals
+    if (/\$\{/.test(rawName)) continue;
+    const safeName = sanitizeIdentifier(toCamelCase(rawName));
+    if (!safeName || seen.has(safeName)) continue; // P2 FIX
+    seen.add(safeName);
     const type = inferFormFieldType(el.type);
     const initial = type === 'boolean' ? 'false' : type === 'number' ? '0' : "''";
-    lines.push(`  readonly ${toCamelCase(name)} = signal<${type}>(${initial});`);
+    lines.push(`  readonly ${safeName} = signal<${type}>(${initial});`);
   }
 
   return lines.join('\n') + '\n';
@@ -255,26 +359,33 @@ function inferFormFieldType(htmlType: string | null): string {
 function buildMethodsFromScriptRun(
   template: HtmlTemplate,
   referencedFunctions: readonly AppScriptFunction[],
+  serviceInstanceName: string, // P4 FIX: use consistent service name
 ): string {
   if (template.scriptRunCalls.length === 0) return '';
 
   const methods: string[] = [];
+  const seenMethods = new Set<string>(); // P5 FIX: deduplicate methods
 
   for (const call of template.scriptRunCalls) {
     const fn = referencedFunctions.find((f) => f.name === call.serverFunction);
     const methodName = toCamelCase(call.serverFunction);
+
+    // P5 FIX: skip duplicate methods
+    if (seenMethods.has(methodName)) continue;
+    seenMethods.add(methodName);
+
     const params = fn?.params.map((p) => `${p.name}: ${p.type}`).join(', ') || '';
 
     methods.push(`
   ${methodName}(${params}): void {
     this.loading.set(true);
     this.error.set(null);
-    this.${toCamelCase(template.fileName.replace('.html', ''))}Service.${methodName}(${fn?.params.map((p) => p.name).join(', ') || ''}).subscribe({
-      next: (result) => {
+    this.${serviceInstanceName}.${methodName}(${fn?.params.map((p) => p.name).join(', ') || ''}).subscribe({
+      next: (result: unknown) => {
         this.loading.set(false);
         // TODO: procesar resultado
       },
-      error: (err) => {
+      error: (err: Error) => {
         this.loading.set(false);
         this.error.set(err.message ?? 'Error desconocido');
       },
@@ -324,8 +435,12 @@ function buildLoadingWrapper(template: HtmlTemplate): string {
 
 function generatePrimeNgFormField(el: HtmlFormElement): string {
   const name = el.name || el.id || 'field';
-  const camelName = toCamelCase(name);
-  const label = toPascalCase(name).replace(/([A-Z])/g, ' $1').trim();
+  // P1 FIX: skip fields with unresolved template literals
+  if (/\$\{/.test(name)) return '';
+  const safeName = sanitizeIdentifier(name);
+  if (!safeName) return '';
+  const camelName = toCamelCase(safeName);
+  const label = toPascalCase(safeName).replace(/([A-Z])/g, ' $1').trim();
 
   switch (el.tag) {
     case 'select':
@@ -385,7 +500,12 @@ function generateComponentScss(template: HtmlTemplate): string {
 
   // Generar stubs para clases CSS del template original
   for (const cls of template.cssClasses) {
-    lines.push(`.${cls} {`);
+    // P1 FIX: skip CSS classes with template literals or invalid chars
+    if (/\$\{/.test(cls) || /[{}();:=!?<>]/.test(cls) || /^\d/.test(cls) || !cls.trim()) continue;
+    // Skip classes that are just numbers or single chars
+    const safeCls = cls.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeCls || safeCls.length < 2) continue;
+    lines.push(`.${safeCls} {`);
     lines.push('  // TODO: migrar estilos del template Apps Script original');
     lines.push('}');
     lines.push('');

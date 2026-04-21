@@ -97,9 +97,10 @@ function buildServerCallableMethod(fn: AppScriptFunction, moduleName: string): s
   const paramNames = fn.params.map((p) => p.name);
   const hasParams = fn.params.length > 0;
 
+  // P6 FIX: post always needs a body argument
   const bodyArg = hasParams
     ? `, { ${paramNames.join(', ')} }`
-    : '';
+    : ', {}';
 
   return `
   /**
@@ -128,7 +129,8 @@ function buildExternalCallMethod(call: ExternalApiCall): string {
   }
 
   const bodyParam = call.hasPayload ? `${urlParam ? ', ' : ''}body: unknown` : '';
-  const bodyArg = call.hasPayload ? ', body' : '';
+  // P6 FIX: post always needs a body argument
+  const bodyArg = call.hasPayload ? ', body' : ', {}';
 
   return `
   /**

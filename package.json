@@ -1,6 +1,6 @@
 {
   "name": "@cls-bolivar/mcp-front-migrate",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "MCP Server para migración de micro-frontends React → Angular CLS con pipeline completo",
   "type": "module",
   "main": "dist/index.js",

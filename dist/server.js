@@ -34,6 +34,8 @@ import { generateServiceFromAppScript } from './generators/appscript-service.gen
 import { readAppScriptProject, projectToFileMap } from './google/appscript-client.js';
 // --- Detector inteligente de fuente ---
 import { detectSourceType, detectFromFileMap, isScriptId } from './pipeline/source-detector.js';
+// --- Project scaffolder (para generar proyecto Angular completo) ---
+import { scaffoldProject } from './pipeline/project-scaffolder.js';
 // ---------------------------------------------------------------------------
 // Zod Schemas – Pipeline original
 // ---------------------------------------------------------------------------
@@ -771,6 +773,134 @@ export function createServer() {
                                 totalFiles: Object.keys(outputFiles).length,
                             },
                             files: outputFiles,
+                        }, null, 2),
+                    }],
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'error',
+                            message: error instanceof Error ? error.message : String(error),
+                            hint: 'Verifica: 1) Apps Script API habilitada, 2) Script compartido con la cuenta de servicio, 3) GOOGLE_SERVICE_ACCOUNT_KEY en env',
+                        }),
+                    }],
+                isError: true,
+            };
+        }
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TOOL: MIGRACIÓN COMPLETA APPS SCRIPT → PROYECTO ANGULAR
+    // ═══════════════════════════════════════════════════════════════════════════
+    server.tool('migrate_appscript_full_project', `Migra un proyecto Apps Script completo a un proyecto Angular 20 + PrimeNG 19 listo para ejecutar.
+    Lee desde GCP usando cuenta de servicio, analiza, convierte, y genera un proyecto completo con:
+    package.json, angular.json, tsconfig.json, rutas, tema Seguros Bolívar, componentes, servicios, y todos los archivos necesarios.
+    El proyecto generado está listo para npm install && ng serve sin intervención manual.
+    Requiere: GOOGLE_SERVICE_ACCOUNT_KEY en env del MCP.`, {
+        scriptId: z.string().describe('ID del proyecto Apps Script en GCP'),
+        moduleName: z.string().describe('Nombre del módulo/feature Angular'),
+        outputDir: z.string().describe('Ruta para el proyecto Angular de salida'),
+        options: z.object({
+            angularVersion: z.string().optional().describe('Versión de Angular (default: 20)'),
+            primeNgVersion: z.string().optional().describe('Versión de PrimeNG (default: 19)'),
+            strictMode: z.boolean().optional().describe('Modo estricto (default: true)'),
+            baseApiUrl: z.string().optional().describe('URL base de API (default: /servicios-core/api/v1/)'),
+        }).optional(),
+    }, async ({ scriptId, moduleName, outputDir, options }) => {
+        try {
+            const startTime = Date.now();
+            // 1. Leer proyecto desde GCP
+            const project = await readAppScriptProject(scriptId);
+            const fileMap = projectToFileMap(project);
+            // 2. Analizar
+            const analysis = analyzeAppScript(fileMap, project.title);
+            // 3. Generar componentes Angular
+            const components = generateAngularFromAppScript(analysis, moduleName);
+            const paths = buildModulePaths(moduleName);
+            const moduleKebab = toKebabCase(moduleName);
+            // 4. Generar servicios
+            const serviceResult = generateServiceFromAppScript(analysis, moduleName);
+            // 5. Scaffold del proyecto completo
+            const componentNames = Object.keys(components);
+            const scaffold = scaffoldProject(moduleName, componentNames, options);
+            // 6. Ensamblar todos los archivos
+            const allFiles = {};
+            // Archivos de scaffold (package.json, angular.json, etc.)
+            for (const [filePath, content] of scaffold.files) {
+                allFiles[filePath] = content;
+            }
+            // Componentes
+            for (const [compName, compFiles] of Object.entries(components)) {
+                const kebabName = toKebabCase(compName);
+                const compDir = `src/app/features/${moduleKebab}/components/${kebabName}`;
+                allFiles[`${compDir}/${kebabName}.component.ts`] = compFiles.componentTs;
+                allFiles[`${compDir}/${kebabName}.component.html`] = compFiles.componentHtml;
+                allFiles[`${compDir}/${kebabName}.component.scss`] = compFiles.componentScss;
+                allFiles[`${compDir}/${kebabName}.component.spec.ts`] = compFiles.componentSpec;
+            }
+            // Servicios
+            if (serviceResult) {
+                const kebabName = toKebabCase(moduleName);
+                allFiles[`${paths.services}/${kebabName}.service.ts`] = serviceResult.serviceCode;
+                allFiles[`${paths.services}/${kebabName}.service.spec.ts`] = serviceResult.serviceSpec;
+                allFiles[`${paths.models}/${kebabName}.model.ts`] = serviceResult.modelCode;
+            }
+            // Rutas (lazy loading por componente)
+            const routeEntries = componentNames.map((name) => {
+                const kebab = toKebabCase(name);
+                return `  {\n    path: '${kebab}',\n    loadComponent: () => import('./features/${moduleKebab}/components/${kebab}/${kebab}.component').then(m => m.${name}Component),\n  }`;
+            });
+            const defaultRoute = componentNames.length > 0
+                ? `  { path: '', redirectTo: '${toKebabCase(componentNames[0])}', pathMatch: 'full' }`
+                : `  { path: '', redirectTo: '', pathMatch: 'full' }`;
+            const routesFile = `import { Routes } from '@angular/router';\n\nexport const routes: Routes = [\n${defaultRoute},\n${routeEntries.join(',\n')},\n];\n`;
+            allFiles['src/app/app.routes.ts'] = routesFile;
+            // Tema Seguros Bolívar
+            allFiles['src/styles/_sb-primeng-theme.scss'] = `// Tema Seguros Bolívar para PrimeNG\n// Generado automáticamente desde Apps Script: ${project.title}\n\n:root {\n  --sb-primary: #0a6c45;\n  --sb-secondary: #f5a623;\n  --sb-font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;\n  --sb-spacing-sm: 0.5rem;\n  --sb-spacing-md: 1rem;\n  --sb-spacing-lg: 1.5rem;\n  --sb-spacing-xl: 2rem;\n}\n`;
+            // 7. Escribir archivos en disco
+            const { mkdirSync, writeFileSync } = await import('fs');
+            const { join, dirname } = await import('path');
+            for (const [filePath, content] of Object.entries(allFiles)) {
+                const fullPath = join(outputDir, filePath);
+                mkdirSync(dirname(fullPath), { recursive: true });
+                writeFileSync(fullPath, content, 'utf-8');
+            }
+            const duration = Date.now() - startTime;
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'success',
+                            source: {
+                                scriptId: project.scriptId,
+                                title: project.title,
+                                filesRead: project.files.length,
+                            },
+                            analysis: {
+                                totalFunctions: analysis.totalFunctions,
+                                entryPoints: analysis.entryPoints.map((e) => e.name),
+                                htmlTemplates: analysis.htmlTemplates.length,
+                                googleServices: [...new Set(analysis.googleServiceCalls.map((c) => c.service))],
+                            },
+                            output: {
+                                outputDir,
+                                totalFiles: Object.keys(allFiles).length,
+                                componentsGenerated: componentNames,
+                                hasService: !!serviceResult,
+                                routesGenerated: componentNames.length,
+                            },
+                            migrationSummary: {
+                                componentsTotal: analysis.htmlTemplates.length || 1,
+                                componentsMigrated: componentNames.length,
+                                servicesGenerated: serviceResult ? 1 : 0,
+                                routesGenerated: componentNames.length,
+                                formElementsMigrated: analysis.htmlTemplates.reduce((sum, t) => sum + t.formElements.length, 0),
+                                scriptRunCallsMigrated: analysis.htmlTemplates.reduce((sum, t) => sum + t.scriptRunCalls.length, 0),
+                            },
+                            duration: duration + 'ms',
+                            nextStep: `cd ${outputDir} && npm install && ng serve`,
                         }, null, 2),
                     }],
             };

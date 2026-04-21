@@ -35,6 +35,9 @@ export const ENV_KEYS = {
     MIN_TEST_COVERAGE: 'MCP_MIN_TEST_COVERAGE',
     // API
     API_BASE_URL: 'MCP_API_BASE_URL',
+    // Google Apps Script (Service Account)
+    GOOGLE_SERVICE_ACCOUNT_KEY: 'GOOGLE_SERVICE_ACCOUNT_KEY',
+    GOOGLE_SERVICE_ACCOUNT_JSON: 'GOOGLE_SERVICE_ACCOUNT_JSON',
 };
 /** Valores por defecto cuando la variable no está definida */
 const ENV_DEFAULTS = {

@@ -22,10 +22,18 @@ import { injectClsThemeToScss, injectClsThemeToHtml, generateClsThemeVariables, 
 import { convertToPrimeNg, generatePrimeNgImports, generateSbPrimeNgTheme, } from './generators/primeng-mapper.generator.js';
 import { PipelineEngine } from './pipeline/pipeline-engine.js';
 import { DEFAULT_PIPELINE_RULES } from './models/pipeline.model.js';
-import { toKebabCase, buildModulePaths } from './utils/naming.utils.js';
+import { toKebabCase, buildModulePaths, toPascalCase } from './utils/naming.utils.js';
 import { buildSourceRepoConfig, buildDestRepoConfig, getEnvBool, getEnvNumber, getEnvStatus, ENV_KEYS, } from './utils/env.utils.js';
 // --- Pipeline completo de proyecto ---
 import { migrateFullProject } from './pipeline/project-orchestrator.js';
+// --- Apps Script → Angular ---
+import { analyzeAppScript } from './analyzers/appscript.analyzer.js';
+import { generateAngularFromAppScript } from './generators/appscript-component.generator.js';
+import { generateServiceFromAppScript } from './generators/appscript-service.generator.js';
+// --- Apps Script API Client (GCP Service Account) ---
+import { readAppScriptProject, projectToFileMap } from './google/appscript-client.js';
+// --- Detector inteligente de fuente ---
+import { detectSourceType, detectFromFileMap, isScriptId } from './pipeline/source-detector.js';
 // ---------------------------------------------------------------------------
 // Zod Schemas – Pipeline original
 // ---------------------------------------------------------------------------
@@ -525,6 +533,525 @@ export function createServer() {
         }
     });
     // ═══════════════════════════════════════════════════════════════════════════
+    // TOOLS DE APPS SCRIPT → ANGULAR
+    // ═══════════════════════════════════════════════════════════════════════════
+    // --- Tool: analyze_appscript ---
+    server.tool('analyze_appscript', `Analiza un proyecto Google Apps Script y extrae su estructura completa:
+    - Funciones globales (doGet, doPost, onOpen, onEdit, etc.)
+    - Llamadas google.script.run (client → server)
+    - Servicios Google (SpreadsheetApp, DriveApp, etc.)
+    - HTML templates (HtmlService) con scriptlets
+    - PropertiesService (estado persistente)
+    - UrlFetchApp (llamadas HTTP externas)
+    - Formularios HTML y elementos de UI`, {
+        files: z.record(z.string(), z.string()).describe('Map de fileName → sourceCode (ej: {"Code.gs": "function doGet()...", "Index.html": "<html>..."})'),
+        projectName: z.string().describe('Nombre del proyecto Apps Script'),
+    }, async ({ files, projectName }) => {
+        try {
+            const analysis = analyzeAppScript(files, projectName);
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'success',
+                            analysis,
+                            summary: {
+                                project: analysis.projectName,
+                                totalFiles: analysis.files.length,
+                                totalFunctions: analysis.totalFunctions,
+                                entryPoints: analysis.entryPoints.map((e) => e.name),
+                                serverCallable: analysis.serverCallableFunctions.map((f) => f.name),
+                                googleServices: [...new Set(analysis.googleServiceCalls.map((c) => c.service))],
+                                htmlTemplates: analysis.htmlTemplates.map((t) => t.fileName),
+                                externalApiCalls: analysis.externalApiCalls.length,
+                                propertyKeys: [...new Set(analysis.propertyAccesses.map((p) => p.key))],
+                                migrationNotes: analysis.migrationNotes,
+                            },
+                        }, null, 2),
+                    }],
+            };
+        }
+        catch (error) {
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: `Error al analizar Apps Script: ${error instanceof Error ? error.message : String(error)}` }) }],
+                isError: true,
+            };
+        }
+    });
+    // --- Tool: convert_appscript_to_angular ---
+    server.tool('convert_appscript_to_angular', `Convierte un proyecto Apps Script analizado a componentes Angular Standalone CLS.
+    Genera: .component.ts, .component.html, .component.scss, .component.spec.ts por cada HTML template.
+    Mapeos: google.script.run → HttpClient service, scriptlets → interpolación Angular,
+    formularios HTML → PrimeNG + Reactive Forms, PropertiesService → localStorage/backend.`, {
+        files: z.record(z.string(), z.string()).describe('Map de fileName → sourceCode del proyecto Apps Script'),
+        projectName: z.string().describe('Nombre del proyecto Apps Script'),
+        moduleName: z.string().describe('Nombre del módulo/feature CLS destino'),
+    }, async ({ files, projectName, moduleName }) => {
+        try {
+            const analysis = analyzeAppScript(files, projectName);
+            const components = generateAngularFromAppScript(analysis, moduleName);
+            const paths = buildModulePaths(moduleName);
+            const outputFiles = {};
+            for (const [compName, compFiles] of Object.entries(components)) {
+                const kebabName = toKebabCase(compName);
+                const basePath = `${paths.components}/${kebabName}`;
+                outputFiles[`${basePath}/${kebabName}.component.ts`] = compFiles.componentTs;
+                outputFiles[`${basePath}/${kebabName}.component.html`] = compFiles.componentHtml;
+                outputFiles[`${basePath}/${kebabName}.component.scss`] = compFiles.componentScss;
+                outputFiles[`${basePath}/${kebabName}.component.spec.ts`] = compFiles.componentSpec;
+            }
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'success',
+                            componentsGenerated: Object.keys(components),
+                            outputPath: paths.components,
+                            files: outputFiles,
+                            conversionLog: {
+                                htmlTemplatesMigrated: analysis.htmlTemplates.length,
+                                scriptRunCallsMigrated: analysis.htmlTemplates.reduce((sum, t) => sum + t.scriptRunCalls.length, 0),
+                                formElementsMigrated: analysis.htmlTemplates.reduce((sum, t) => sum + t.formElements.length, 0),
+                            },
+                        }, null, 2),
+                    }],
+            };
+        }
+        catch (error) {
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: `Error en conversión Apps Script: ${error instanceof Error ? error.message : String(error)}` }) }],
+                isError: true,
+            };
+        }
+    });
+    // --- Tool: generate_appscript_services ---
+    server.tool('generate_appscript_services', `Genera servicios Angular (.service.ts) a partir de funciones server-side de Apps Script.
+    Convierte google.script.run → HttpClient, UrlFetchApp → HttpClient, PropertiesService → localStorage.
+    Usa inject(), base URL: /servicios-core/api/v1/, prohibido 'any'.`, {
+        files: z.record(z.string(), z.string()).describe('Map de fileName → sourceCode del proyecto Apps Script'),
+        projectName: z.string().describe('Nombre del proyecto Apps Script'),
+        moduleName: z.string().describe('Nombre del módulo CLS destino'),
+    }, async ({ files, projectName, moduleName }) => {
+        try {
+            const analysis = analyzeAppScript(files, projectName);
+            const serviceResult = generateServiceFromAppScript(analysis, moduleName);
+            if (!serviceResult) {
+                return { content: [{ type: 'text', text: JSON.stringify({ status: 'info', message: 'No se detectaron funciones server-side, llamadas externas ni PropertiesService.' }) }] };
+            }
+            const paths = buildModulePaths(moduleName);
+            const kebabName = toKebabCase(moduleName);
+            const outputFiles = {
+                [`${paths.services}/${kebabName}.service.ts`]: serviceResult.serviceCode,
+                [`${paths.services}/${kebabName}.service.spec.ts`]: serviceResult.serviceSpec,
+                [`${paths.models}/${kebabName}.model.ts`]: serviceResult.modelCode,
+            };
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'success',
+                            serviceName: `${toPascalCase(moduleName)}Service`,
+                            baseUrl: '/servicios-core/api/v1',
+                            outputFiles,
+                            migrationLog: {
+                                serverCallableMethods: analysis.serverCallableFunctions.length,
+                                externalApiMethods: analysis.externalApiCalls.length,
+                                propertyMethods: [...new Set(analysis.propertyAccesses.map((p) => p.key))].length,
+                            },
+                        }, null, 2),
+                    }],
+            };
+        }
+        catch (error) {
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ status: 'error', message: `Error generando servicio: ${error instanceof Error ? error.message : String(error)}` }) }],
+                isError: true,
+            };
+        }
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TOOL: LEER APPS SCRIPT DESDE GCP (Service Account)
+    // ═══════════════════════════════════════════════════════════════════════════
+    server.tool('read_appscript_from_gcp', `Lee un proyecto Google Apps Script completo usando una cuenta de servicio de GCP.
+    Requiere: Apps Script API habilitada, script compartido con la cuenta de servicio.
+    Credenciales via env: GOOGLE_SERVICE_ACCOUNT_KEY (JSON string) o GOOGLE_SERVICE_ACCOUNT_JSON (ruta archivo).
+    Retorna todos los archivos (.gs, .html, .json) listos para analizar o convertir.`, {
+        scriptId: z.string().describe('ID del proyecto Apps Script (ej: 18hR_xREcu3r4YNWkZqCDDTBtnHsXg4Ri_02cjVbzjIjTlmQ7DQrKw-KH)'),
+    }, async ({ scriptId }) => {
+        try {
+            const project = await readAppScriptProject(scriptId);
+            const fileMap = projectToFileMap(project);
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'success',
+                            project: {
+                                scriptId: project.scriptId,
+                                title: project.title,
+                                totalFiles: project.files.length,
+                                files: project.files.map((f) => ({
+                                    name: f.name,
+                                    type: f.type,
+                                    lines: f.source.split('\n').length,
+                                })),
+                            },
+                            fileMap,
+                        }, null, 2),
+                    }],
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'error',
+                            message: error instanceof Error ? error.message : String(error),
+                            hint: 'Verifica: 1) Apps Script API habilitada en GCP, 2) Script compartido con la cuenta de servicio, 3) GOOGLE_SERVICE_ACCOUNT_KEY definida en env del MCP',
+                        }),
+                    }],
+                isError: true,
+            };
+        }
+    });
+    // --- Tool: migrate_appscript_from_gcp ---
+    server.tool('migrate_appscript_from_gcp', `Lee un proyecto Apps Script desde GCP por script ID y lo migra completo a Angular CLS.
+    Combina read_appscript_from_gcp + analyze + convert + generate services en un solo paso.
+    Requiere: GOOGLE_SERVICE_ACCOUNT_KEY en env del MCP.`, {
+        scriptId: z.string().describe('ID del proyecto Apps Script'),
+        moduleName: z.string().describe('Nombre del módulo/feature CLS destino'),
+    }, async ({ scriptId, moduleName }) => {
+        try {
+            // 1. Leer proyecto desde GCP
+            const project = await readAppScriptProject(scriptId);
+            const fileMap = projectToFileMap(project);
+            // 2. Analizar
+            const analysis = analyzeAppScript(fileMap, project.title);
+            // 3. Generar componentes Angular
+            const components = generateAngularFromAppScript(analysis, moduleName);
+            const paths = buildModulePaths(moduleName);
+            const outputFiles = {};
+            for (const [compName, compFiles] of Object.entries(components)) {
+                const kebabName = toKebabCase(compName);
+                const basePath = `${paths.components}/${kebabName}`;
+                outputFiles[`${basePath}/${kebabName}.component.ts`] = compFiles.componentTs;
+                outputFiles[`${basePath}/${kebabName}.component.html`] = compFiles.componentHtml;
+                outputFiles[`${basePath}/${kebabName}.component.scss`] = compFiles.componentScss;
+                outputFiles[`${basePath}/${kebabName}.component.spec.ts`] = compFiles.componentSpec;
+            }
+            // 4. Generar servicios
+            const serviceResult = generateServiceFromAppScript(analysis, moduleName);
+            if (serviceResult) {
+                const kebabName = toKebabCase(moduleName);
+                outputFiles[`${paths.services}/${kebabName}.service.ts`] = serviceResult.serviceCode;
+                outputFiles[`${paths.services}/${kebabName}.service.spec.ts`] = serviceResult.serviceSpec;
+                outputFiles[`${paths.models}/${kebabName}.model.ts`] = serviceResult.modelCode;
+            }
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'success',
+                            source: {
+                                scriptId: project.scriptId,
+                                title: project.title,
+                                filesRead: project.files.length,
+                            },
+                            analysis: {
+                                totalFunctions: analysis.totalFunctions,
+                                entryPoints: analysis.entryPoints.map((e) => e.name),
+                                htmlTemplates: analysis.htmlTemplates.length,
+                                googleServices: [...new Set(analysis.googleServiceCalls.map((c) => c.service))],
+                                migrationNotes: analysis.migrationNotes,
+                            },
+                            output: {
+                                componentsGenerated: Object.keys(components),
+                                hasService: !!serviceResult,
+                                totalFiles: Object.keys(outputFiles).length,
+                            },
+                            files: outputFiles,
+                        }, null, 2),
+                    }],
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'error',
+                            message: error instanceof Error ? error.message : String(error),
+                            hint: 'Verifica: 1) Apps Script API habilitada, 2) Script compartido con la cuenta de servicio, 3) GOOGLE_SERVICE_ACCOUNT_KEY en env',
+                        }),
+                    }],
+                isError: true,
+            };
+        }
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TOOL UNIFICADO: SMART MIGRATE (detección automática)
+    // ═══════════════════════════════════════════════════════════════════════════
+    server.tool('smart_migrate', `Tool unificado de migración a Angular CLS con detección automática del tipo de fuente.
+    Detecta si el input es React, Apps Script, o un script ID de GCP y enruta al pipeline correcto.
+    
+    Modos de uso:
+    - scriptId → Lee desde GCP con cuenta de servicio y migra Apps Script → Angular
+    - sourceCode → Detecta si es React o Apps Script por patrones en el código
+    - files (Record<fileName, sourceCode>) → Detecta por extensiones (.gs/.html vs .tsx/.jsx)
+    
+    Solo necesitas pasar UNO de los tres: scriptId, sourceCode, o files.`, {
+        moduleName: z.string().describe('Nombre del módulo/feature CLS destino'),
+        scriptId: z.string().optional().describe('ID del proyecto Apps Script en GCP (si se pasa, ignora sourceCode y files)'),
+        sourceCode: z.string().optional().describe('Código fuente de un componente (React TSX/JSX o Apps Script .gs)'),
+        fileName: z.string().optional().describe('Nombre del archivo (ayuda a la detección, ej: App.tsx o Code.gs)'),
+        files: z.record(z.string(), z.string()).optional().describe('Map de fileName → sourceCode para proyectos multi-archivo'),
+    }, async ({ moduleName, scriptId, sourceCode, fileName, files }) => {
+        try {
+            // ─── CASO 1: Script ID → GCP Apps Script ───
+            if (scriptId && isScriptId(scriptId)) {
+                const project = await readAppScriptProject(scriptId);
+                const fileMap = projectToFileMap(project);
+                const analysis = analyzeAppScript(fileMap, project.title);
+                const components = generateAngularFromAppScript(analysis, moduleName);
+                const paths = buildModulePaths(moduleName);
+                const outputFiles = {};
+                for (const [compName, compFiles] of Object.entries(components)) {
+                    const kebabName = toKebabCase(compName);
+                    const basePath = `${paths.components}/${kebabName}`;
+                    outputFiles[`${basePath}/${kebabName}.component.ts`] = compFiles.componentTs;
+                    outputFiles[`${basePath}/${kebabName}.component.html`] = compFiles.componentHtml;
+                    outputFiles[`${basePath}/${kebabName}.component.scss`] = compFiles.componentScss;
+                    outputFiles[`${basePath}/${kebabName}.component.spec.ts`] = compFiles.componentSpec;
+                }
+                const serviceResult = generateServiceFromAppScript(analysis, moduleName);
+                if (serviceResult) {
+                    const kebabName = toKebabCase(moduleName);
+                    outputFiles[`${paths.services}/${kebabName}.service.ts`] = serviceResult.serviceCode;
+                    outputFiles[`${paths.services}/${kebabName}.service.spec.ts`] = serviceResult.serviceSpec;
+                    outputFiles[`${paths.models}/${kebabName}.model.ts`] = serviceResult.modelCode;
+                }
+                return {
+                    content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'success',
+                                detectedType: 'appscript-gcp',
+                                confidence: 100,
+                                signals: ['scriptId provided → GCP Apps Script API'],
+                                source: { scriptId: project.scriptId, title: project.title, filesRead: project.files.length },
+                                analysis: {
+                                    totalFunctions: analysis.totalFunctions,
+                                    entryPoints: analysis.entryPoints.map((e) => e.name),
+                                    htmlTemplates: analysis.htmlTemplates.length,
+                                    googleServices: [...new Set(analysis.googleServiceCalls.map((c) => c.service))],
+                                    migrationNotes: analysis.migrationNotes,
+                                },
+                                output: {
+                                    componentsGenerated: Object.keys(components),
+                                    hasService: !!serviceResult,
+                                    totalFiles: Object.keys(outputFiles).length,
+                                },
+                                files: outputFiles,
+                            }, null, 2),
+                        }],
+                };
+            }
+            // ─── CASO 2: files (multi-archivo) ───
+            if (files && Object.keys(files).length > 0) {
+                const detection = detectFromFileMap(files);
+                if (detection.type === 'appscript') {
+                    const projectName = moduleName;
+                    const analysis = analyzeAppScript(files, projectName);
+                    const components = generateAngularFromAppScript(analysis, moduleName);
+                    const paths = buildModulePaths(moduleName);
+                    const outputFiles = {};
+                    for (const [compName, compFiles] of Object.entries(components)) {
+                        const kebabName = toKebabCase(compName);
+                        const basePath = `${paths.components}/${kebabName}`;
+                        outputFiles[`${basePath}/${kebabName}.component.ts`] = compFiles.componentTs;
+                        outputFiles[`${basePath}/${kebabName}.component.html`] = compFiles.componentHtml;
+                        outputFiles[`${basePath}/${kebabName}.component.scss`] = compFiles.componentScss;
+                        outputFiles[`${basePath}/${kebabName}.component.spec.ts`] = compFiles.componentSpec;
+                    }
+                    const serviceResult = generateServiceFromAppScript(analysis, moduleName);
+                    if (serviceResult) {
+                        const kebabName = toKebabCase(moduleName);
+                        outputFiles[`${paths.services}/${kebabName}.service.ts`] = serviceResult.serviceCode;
+                        outputFiles[`${paths.services}/${kebabName}.service.spec.ts`] = serviceResult.serviceSpec;
+                        outputFiles[`${paths.models}/${kebabName}.model.ts`] = serviceResult.modelCode;
+                    }
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'success',
+                                    detectedType: detection.type,
+                                    confidence: detection.confidence,
+                                    signals: detection.signals,
+                                    output: { componentsGenerated: Object.keys(components), hasService: !!serviceResult, totalFiles: Object.keys(outputFiles).length },
+                                    files: outputFiles,
+                                }, null, 2),
+                            }],
+                    };
+                }
+                if (detection.type === 'react') {
+                    // Para React multi-archivo, procesar cada archivo
+                    const allOutputFiles = {};
+                    const componentNames = [];
+                    for (const [fName, fCode] of Object.entries(files)) {
+                        if (!/\.(tsx|jsx)$/.test(fName))
+                            continue;
+                        try {
+                            const analysis = analyzeReactComponent(fCode, fName);
+                            const angularFiles = generateAngularComponent(analysis, moduleName);
+                            const paths = buildModulePaths(moduleName);
+                            const kebabName = toKebabCase(analysis.componentName);
+                            allOutputFiles[`${paths.components}/${kebabName}/${kebabName}.component.ts`] = angularFiles.componentTs;
+                            allOutputFiles[`${paths.components}/${kebabName}/${kebabName}.component.html`] = angularFiles.componentHtml;
+                            allOutputFiles[`${paths.components}/${kebabName}/${kebabName}.component.scss`] = angularFiles.componentScss;
+                            allOutputFiles[`${paths.components}/${kebabName}/${kebabName}.component.spec.ts`] = angularFiles.componentSpec;
+                            componentNames.push(analysis.componentName);
+                        }
+                        catch {
+                            // Skip archivos que no son componentes válidos
+                        }
+                    }
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'success',
+                                    detectedType: detection.type,
+                                    confidence: detection.confidence,
+                                    signals: detection.signals,
+                                    output: { componentsGenerated: componentNames, totalFiles: Object.keys(allOutputFiles).length },
+                                    files: allOutputFiles,
+                                }, null, 2),
+                            }],
+                    };
+                }
+                return {
+                    content: [{ type: 'text', text: JSON.stringify({ status: 'error', detectedType: 'unknown', confidence: detection.confidence, signals: detection.signals, message: 'No se pudo determinar el tipo de fuente. Usa scriptId para Apps Script de GCP, o asegúrate de que los archivos tengan extensiones .tsx/.jsx (React) o .gs/.html (Apps Script).' }) }],
+                    isError: true,
+                };
+            }
+            // ─── CASO 3: sourceCode (archivo único) ───
+            if (sourceCode) {
+                // Ayuda extra del fileName si viene
+                let detection = detectSourceType(sourceCode);
+                if (detection.type === 'unknown' && fileName) {
+                    if (/\.(tsx|jsx)$/.test(fileName)) {
+                        detection = { type: 'react', confidence: 70, signals: [`fileName ${fileName} indica React`] };
+                    }
+                    else if (/\.(gs|gas)$/.test(fileName)) {
+                        detection = { type: 'appscript', confidence: 70, signals: [`fileName ${fileName} indica Apps Script`] };
+                    }
+                }
+                if (detection.type === 'react') {
+                    const fName = fileName || 'Component.tsx';
+                    const analysis = analyzeReactComponent(sourceCode, fName);
+                    const angularFiles = generateAngularComponent(analysis, moduleName);
+                    const paths = buildModulePaths(moduleName);
+                    const kebabName = toKebabCase(analysis.componentName);
+                    const outputFiles = {
+                        [`${paths.components}/${kebabName}/${kebabName}.component.ts`]: angularFiles.componentTs,
+                        [`${paths.components}/${kebabName}/${kebabName}.component.html`]: angularFiles.componentHtml,
+                        [`${paths.components}/${kebabName}/${kebabName}.component.scss`]: angularFiles.componentScss,
+                        [`${paths.components}/${kebabName}/${kebabName}.component.spec.ts`]: angularFiles.componentSpec,
+                    };
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'success',
+                                    detectedType: detection.type,
+                                    confidence: detection.confidence,
+                                    signals: detection.signals,
+                                    output: { componentName: analysis.componentName, totalFiles: Object.keys(outputFiles).length },
+                                    files: outputFiles,
+                                }, null, 2),
+                            }],
+                    };
+                }
+                if (detection.type === 'appscript') {
+                    const fName = fileName || 'Code.gs';
+                    const fileMap = { [fName]: sourceCode };
+                    const analysis = analyzeAppScript(fileMap, moduleName);
+                    const components = generateAngularFromAppScript(analysis, moduleName);
+                    const paths = buildModulePaths(moduleName);
+                    const outputFiles = {};
+                    for (const [compName, compFiles] of Object.entries(components)) {
+                        const kName = toKebabCase(compName);
+                        const basePath = `${paths.components}/${kName}`;
+                        outputFiles[`${basePath}/${kName}.component.ts`] = compFiles.componentTs;
+                        outputFiles[`${basePath}/${kName}.component.html`] = compFiles.componentHtml;
+                        outputFiles[`${basePath}/${kName}.component.scss`] = compFiles.componentScss;
+                        outputFiles[`${basePath}/${kName}.component.spec.ts`] = compFiles.componentSpec;
+                    }
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'success',
+                                    detectedType: detection.type,
+                                    confidence: detection.confidence,
+                                    signals: detection.signals,
+                                    output: { componentsGenerated: Object.keys(components), totalFiles: Object.keys(outputFiles).length },
+                                    files: outputFiles,
+                                }, null, 2),
+                            }],
+                    };
+                }
+                // También verificar si el sourceCode es en realidad un script ID
+                if (isScriptId(sourceCode.trim())) {
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'info',
+                                    message: `"${sourceCode.trim()}" parece un script ID de Apps Script. Reintentando como scriptId...`,
+                                    hint: 'Usa el parámetro scriptId en vez de sourceCode para leer desde GCP.',
+                                }),
+                            }],
+                    };
+                }
+                return {
+                    content: [{ type: 'text', text: JSON.stringify({ status: 'error', detectedType: 'unknown', confidence: detection.confidence, signals: detection.signals, message: 'No se pudo determinar si el código es React o Apps Script. Incluye el fileName para ayudar a la detección.' }) }],
+                    isError: true,
+                };
+            }
+            // ─── Ningún input proporcionado ───
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'error',
+                            message: 'Debes proporcionar al menos uno: scriptId (para leer desde GCP), sourceCode (código de un archivo), o files (mapa de archivos).',
+                            examples: {
+                                gcp: '{ "scriptId": "18hR_xREcu...", "moduleName": "mi-modulo" }',
+                                react: '{ "sourceCode": "import React...", "moduleName": "mi-modulo" }',
+                                appscript: '{ "files": {"Code.gs": "function doGet()..."}, "moduleName": "mi-modulo" }',
+                            },
+                        }),
+                    }],
+                isError: true,
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'error',
+                            message: error instanceof Error ? error.message : String(error),
+                        }),
+                    }],
+                isError: true,
+            };
+        }
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
     // PROMPTS DE ORQUESTACIÓN
     // ═══════════════════════════════════════════════════════════════════════════
     server.prompt('migrate_react_to_angular', `Prompt de orquestación para migrar un componente React completo a Angular CLS.`, {
@@ -578,6 +1105,36 @@ Módulo destino: ${moduleName}`,
 1. Usa validate_pipeline_config para verificar acceso a ambos repos
 2. Si pasa, ejecuta run_migration_pipeline con strictMode=true
 3. Si falla, reporta exactamente qué falló y por qué`,
+                },
+            }],
+    }));
+    server.prompt('migrate_appscript_to_angular', `Prompt de orquestación para migrar un proyecto Apps Script completo a Angular CLS.`, {
+        projectName: z.string().describe('Nombre del proyecto Apps Script'),
+        moduleName: z.string().describe('Nombre del módulo destino'),
+    }, ({ projectName, moduleName }) => ({
+        messages: [{
+                role: 'user',
+                content: {
+                    type: 'text',
+                    text: `Migra el proyecto Apps Script "${projectName}" a Angular CLS.
+
+## Reglas de Migración Apps Script → Angular
+- google.script.run.fn() → HttpClient.post() en un servicio Angular
+- HTML templates (HtmlService) → componentes Angular standalone con PrimeNG
+- Scriptlets (<? ?>, <?= ?>) → interpolación Angular {{ }} / @if / @for
+- PropertiesService → localStorage o backend endpoint
+- UrlFetchApp.fetch() → HttpClient
+- Formularios HTML → Reactive Forms con PrimeNG
+- Standalone Components, OnPush, archivos separados, kebab-case, prohibido 'any'
+
+## Pasos
+1. Usa analyze_appscript para descomponer el proyecto
+2. Usa convert_appscript_to_angular para generar los componentes Angular
+3. Usa generate_appscript_services para generar los servicios
+4. Usa inject_cls_theme para aplicar el tema CLS
+5. Usa inject_primeng_ui para convertir formularios a PrimeNG
+
+Módulo destino: ${moduleName}`,
                 },
             }],
     }));

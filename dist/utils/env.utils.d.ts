@@ -32,6 +32,8 @@ export declare const ENV_KEYS: {
     readonly REQUIRE_TESTS: "MCP_REQUIRE_TESTS";
     readonly MIN_TEST_COVERAGE: "MCP_MIN_TEST_COVERAGE";
     readonly API_BASE_URL: "MCP_API_BASE_URL";
+    readonly GOOGLE_SERVICE_ACCOUNT_KEY: "GOOGLE_SERVICE_ACCOUNT_KEY";
+    readonly GOOGLE_SERVICE_ACCOUNT_JSON: "GOOGLE_SERVICE_ACCOUNT_JSON";
 };
 /**
  * Lee una variable de entorno. Retorna el default si no existe.

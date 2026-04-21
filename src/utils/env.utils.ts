@@ -41,6 +41,10 @@ export const ENV_KEYS = {
 
   // API
   API_BASE_URL: 'MCP_API_BASE_URL',
+
+  // Google Apps Script (Service Account)
+  GOOGLE_SERVICE_ACCOUNT_KEY: 'GOOGLE_SERVICE_ACCOUNT_KEY',
+  GOOGLE_SERVICE_ACCOUNT_JSON: 'GOOGLE_SERVICE_ACCOUNT_JSON',
 } as const;
 
 /** Valores por defecto cuando la variable no está definida */

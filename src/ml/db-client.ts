@@ -81,10 +81,7 @@ const TABLE = {
 
 // ─── Internal State ──────────────────────────────────────────────────────────
 
-const DEFAULT_API_BASE = 'https://r4yl4sit9d.execute-api.us-east-1.amazonaws.com/dev/api/v1';
 const DEFAULT_STORE = 'MCP CLS - CLEVER';
-const DEFAULT_CLIENT_ID = 'MCP CLS - Clever';
-const DEFAULT_CLIENT_SECRET = 'SdjiHvDrXFUoXhV39TfUIGOoZz1GxbQwe_BVJSSPDCI';
 const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
 
 let _config: DbConfig | null = null;
@@ -114,7 +111,7 @@ export function isDbConfigured(): boolean {
 // ─── Internal Helpers ────────────────────────────────────────────────────────
 
 function getApiBase(): string {
-  return _config?.apiBase ?? DEFAULT_API_BASE;
+  return _config?.apiBase ?? process.env['MCP_DB_API_BASE'] ?? '';
 }
 
 function getStoreName(): string {
@@ -124,12 +121,18 @@ function getStoreName(): string {
 async function getToken(): Promise<string> {
   if (_token && Date.now() < _tokenExpiry) return _token;
 
-  // Auto-configure with defaults if not explicitly configured
+  // Auto-configure from environment variables if not explicitly configured
   if (!_config) {
-    _config = {
-      clientId: process.env['MCP_DB_CLIENT_ID'] ?? DEFAULT_CLIENT_ID,
-      clientSecret: process.env['MCP_DB_CLIENT_SECRET'] ?? DEFAULT_CLIENT_SECRET,
-    };
+    const envId = process.env['MCP_DB_CLIENT_ID'];
+    const envSecret = process.env['MCP_DB_CLIENT_SECRET'];
+    const envApiBase = process.env['MCP_DB_API_BASE'];
+    if (!envId || !envSecret || !envApiBase) {
+      throw new Error(
+        'DB not configured. Set environment variables: MCP_DB_API_BASE, MCP_DB_CLIENT_ID, and MCP_DB_CLIENT_SECRET. ' +
+        'Or call configureDb({ clientId, clientSecret, apiBase }) before using DB operations.',
+      );
+    }
+    _config = { clientId: envId, clientSecret: envSecret, apiBase: envApiBase };
   }
 
   const res = await fetch(`${getApiBase()}/auth/token`, {

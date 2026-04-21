@@ -27,4 +27,6 @@ export type { DbConfig, DbError, DbIntento, DbPatch, DbSeguimiento } from './ml/
 export { configureLlm, isLlmConfigured, isAvailable as isLlmAvailable, sugerirFix } from './ml/llm-client.js';
 export type { LlmConfig, LlmFix } from './ml/llm-client.js';
 export { GEMINI_DEFAULT, OLLAMA_DEFAULT } from './ml/defaults.js';
+export { fixGeneratedOutput } from './ml/output-fixer.js';
+export type { GeneratedFile, FixResult } from './ml/output-fixer.js';
 //# sourceMappingURL=index.d.ts.map

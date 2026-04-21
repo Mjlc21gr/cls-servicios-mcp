@@ -111,6 +111,31 @@ async function runConvertPipeline(sourceCode) {
     semanticTemplate = applySemanticHtml(semanticTemplate, ir.componentName);
     const irFinal = { ...irWithPrimeNG, angularTemplate: semanticTemplate };
     const artifact = emitAngularArtifact(irFinal);
+    // Auto-fix generated output with LLM + log to DB (works from npm)
+    try {
+        const { fixGeneratedOutput } = await import('./ml/output-fixer.js');
+        const files = [
+            { path: `${ir.fileName}.component.ts`, content: artifact.componentFile },
+            ...(artifact.templateFile ? [{ path: `${ir.fileName}.component.html`, content: artifact.templateFile }] : []),
+            { path: `${ir.fileName}.component.scss`, content: artifact.scssFile },
+            ...artifact.services.map(s => ({ path: s.fileName, content: s.content })),
+        ];
+        const fixResult = await fixGeneratedOutput(files, ir.componentName);
+        if (fixResult.errorsFixed > 0) {
+            const tsFile = fixResult.files.find(f => f.path.endsWith('.component.ts'));
+            const htmlFile = fixResult.files.find(f => f.path.endsWith('.component.html'));
+            const scssFile = fixResult.files.find(f => f.path.endsWith('.component.scss'));
+            if (tsFile)
+                artifact.componentFile = tsFile.content;
+            if (htmlFile)
+                artifact.templateFile = htmlFile.content;
+            if (scssFile)
+                artifact.scssFile = scssFile.content;
+        }
+    }
+    catch {
+        // LLM/DB not available — return original artifact
+    }
     return {
         content: [
             {
@@ -616,7 +641,7 @@ export function createServer() {
         try {
             const { runOptimizer } = await import('./ml/optimizer.js');
             const llmConfig = process.env['GEMINI_API_KEY']
-                ? { url: 'https://generativelanguage.googleapis.com/v1beta/models', model: 'gemini-2.0-flash', apiKey: process.env['GEMINI_API_KEY'], type: 'gemini' }
+                ? { url: 'https://generativelanguage.googleapis.com/v1beta/models', model: 'gemini-2.5-flash', apiKey: process.env['GEMINI_API_KEY'], type: 'gemini' }
                 : undefined;
             const result = await runOptimizer({
                 mcpRoot: args.mcpRoot,
@@ -624,7 +649,10 @@ export function createServer() {
                 angularOutput: args.angularOutput,
                 moduleName: args.moduleName,
                 maxIterations: args.maxIterations,
-                db: { clientId: 'MCP CLS - Clever', clientSecret: 'SdjiHvDrXFUoXhV39TfUIGOoZz1GxbQwe_BVJSSPDCI' },
+                db: {
+                    clientId: process.env['MCP_DB_CLIENT_ID'] ?? '',
+                    clientSecret: process.env['MCP_DB_CLIENT_SECRET'] ?? '',
+                },
                 llm: llmConfig,
             });
             return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };

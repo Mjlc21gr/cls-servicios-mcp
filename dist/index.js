@@ -30,4 +30,6 @@ export { configureDb, isDbConfigured, getAuthToken, crearIntento, insertError, g
 export { configureLlm, isLlmConfigured, isAvailable as isLlmAvailable, sugerirFix } from './ml/llm-client.js';
 // ─── ML Defaults ─────────────────────────────────────────────────────────────
 export { GEMINI_DEFAULT, OLLAMA_DEFAULT } from './ml/defaults.js';
+// ─── ML Output Fixer ─────────────────────────────────────────────────────────
+export { fixGeneratedOutput } from './ml/output-fixer.js';
 //# sourceMappingURL=index.js.map

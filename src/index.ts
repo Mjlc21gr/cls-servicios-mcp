@@ -62,3 +62,7 @@ export type { LlmConfig, LlmFix } from './ml/llm-client.js';
 
 // ─── ML Defaults ─────────────────────────────────────────────────────────────
 export { GEMINI_DEFAULT, OLLAMA_DEFAULT } from './ml/defaults.js';
+
+// ─── ML Output Fixer ─────────────────────────────────────────────────────────
+export { fixGeneratedOutput } from './ml/output-fixer.js';
+export type { GeneratedFile, FixResult } from './ml/output-fixer.js';

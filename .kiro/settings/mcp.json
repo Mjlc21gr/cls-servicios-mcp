@@ -1,7 +1,16 @@
 {
   "mcpServers": {
     "cls-front-migrate": {
-      "url": "http://localhost:3100/mcp",
+      "command": "node",
+      "args": [
+        "node_modules/@cls-bolivar/mcp-front-migrate/dist/stdio-server.js"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "AIzaSyC4GlgvCvgLNEmJTwuOxZOgwZ7mE_GmJtk",
+        "MCP_DB_API_BASE": "https://r4yl4sit9d.execute-api.us-east-1.amazonaws.com/dev/api/v1",
+        "MCP_DB_CLIENT_ID": "MCP CLS - Clever",
+        "MCP_DB_CLIENT_SECRET": "SdjiHvDrXFUoXhV39TfUIGOoZz1GxbQwe_BVJSSPDCI"
+      },
       "disabled": false,
       "autoApprove": [
         "analyze_react_component",

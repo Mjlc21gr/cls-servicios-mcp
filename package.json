@@ -51,6 +51,7 @@
     "zod-to-json-schema": "^3.25.0"
   },
   "devDependencies": {
+    "@cls-bolivar/mcp-front-migrate": "^1.4.0",
     "@types/babel__traverse": "^7.20.6",
     "@types/node": "^25.6.0",
     "fast-check": "^3.23.0",

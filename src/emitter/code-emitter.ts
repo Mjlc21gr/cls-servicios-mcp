@@ -228,8 +228,9 @@ function rewriteTemplate(template: string, ir: ComponentIR): string {
 
   // 4. Rewrite property bindings: [prop]="expr" — add () to signal names
   //    But NOT [ngModel] which is already handled above
+  //    Handle multiline values by matching everything except unescaped "
   result = result.replace(
-    /\[(\w+)\]="([^"]*)"/g,
+    /\[(\w+)\]="((?:[^"\\]|\\.|\n|\r)*)"/g,
     (_match, prop, expr) => {
       if (prop === 'ngModel') return _match;
       let rewritten = expr;

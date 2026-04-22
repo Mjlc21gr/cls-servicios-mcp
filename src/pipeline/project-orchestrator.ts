@@ -38,6 +38,8 @@ import { validateClassContext } from './class-context-layer.js';
 import { validateTemplateIntegrity } from './template-integrity-layer.js';
 import { validateOutput } from './output-validator.js';
 import { toKebabCase, toPascalCase } from '../utils/naming.utils.js';
+// Syntax Validator — pre-compilation syntax check and auto-fix
+import { validateSyntax } from './syntax-validator.js';
 // Semantic HTML Engine — eliminates divs, enforces clean markup
 import { applySemanticHtml } from './semantic-html-engine.js';
 // Compilation Validator — compiles output and logs errors to API DB
@@ -167,7 +169,9 @@ export async function migrateFullProject(
     // -----------------------------------------------------------------------
     // Step 2: Scan project
     // -----------------------------------------------------------------------
+    console.log('  [1/7] 📂 Escaneando proyecto React...');
     const scannedProject = await scanProject(sourceDir);
+    console.log(`         ${scannedProject.components.length} componentes, ${scannedProject.services.length} servicios, ${scannedProject.styles.length} estilos`);
 
     // -----------------------------------------------------------------------
     // Step 3: Topologically sort components by dependency graph
@@ -186,6 +190,7 @@ export async function migrateFullProject(
     // -----------------------------------------------------------------------
     // Step 4: Transform each component through the pipeline
     // -----------------------------------------------------------------------
+    console.log('  [2/7] ⚙️  Transformando componentes...');
     const transformedComponents = new Map<string, TransformedComponent>();
     let componentsFailed = 0;
 
@@ -194,6 +199,8 @@ export async function migrateFullProject(
       if (!file) continue;
 
       try {
+        const compName = file.path.split('/').pop() ?? file.path;
+        console.log(`         → ${compName}`);
         // 4a. Pre-process class components
         const conversion = convertClassToFunctional(file.content);
         const sourceToProcess = conversion.convertedSource;
@@ -256,6 +263,7 @@ export async function migrateFullProject(
     // Step 4b: Apply Semantic UI Engine to all templates
     // Converts React UI component trees to PrimeNG equivalents
     // -----------------------------------------------------------------------
+    console.log('  [3/7] 🎨 Aplicando reingeniería estructural...');
     for (const [key, comp] of transformedComponents) {
       const semanticHtml = applySemanticUI(comp.componentHtml);
       if (semanticHtml !== comp.componentHtml) {
@@ -293,6 +301,7 @@ export async function migrateFullProject(
     // -----------------------------------------------------------------------
     // Step 5: Aggregate styles (using Style Preservator)
     // -----------------------------------------------------------------------
+    console.log('  [4/7] 🎭 Procesando estilos...');
     const styleResult = aggregateStyles(
       scannedProject,
       transformedComponents,
@@ -345,6 +354,7 @@ export async function migrateFullProject(
     // -----------------------------------------------------------------------
     // Step 8: Fix signals
     // -----------------------------------------------------------------------
+    console.log('  [5/7] 🔧 Post-procesamiento (signals, PrimeNG, integridad)...');
     const signalFixed = fixSignals(transformedComponents);
 
     // -----------------------------------------------------------------------
@@ -363,6 +373,12 @@ export async function migrateFullProject(
     const integrityValidated = validateTemplateIntegrity(contextValidated);
 
     // -----------------------------------------------------------------------
+    // Step 9d: Syntax Validation — pre-compilation check and auto-fix
+    // -----------------------------------------------------------------------
+    console.log('         Validando sintaxis...');
+    const syntaxValidated = validateSyntax(integrityValidated);
+
+    // -----------------------------------------------------------------------
     // Step 10: Assemble all files into a Map<string, string>
     // -----------------------------------------------------------------------
     const allFiles = new Map<string, string>();
@@ -374,7 +390,7 @@ export async function migrateFullProject(
 
     // Components at src/app/features/{moduleName}/components/{kebab-name}/
     const moduleKebab = toKebabCase(moduleName);
-    for (const [, comp] of integrityValidated) {
+    for (const [, comp] of syntaxValidated) {
       const compDir = `src/app/features/${moduleKebab}/components/${comp.kebabName}`;
       let compTs = comp.componentTs;
 
@@ -429,7 +445,7 @@ export async function migrateFullProject(
       // Collect type interfaces from all transformed components' IR
       const typeInterfaces: string[] = [];
       const seenTypes = new Set<string>();
-      for (const [, comp] of integrityValidated) {
+      for (const [, comp] of syntaxValidated) {
         if (comp.ir.typeInterfaces) {
           for (const ti of comp.ir.typeInterfaces) {
             if (!seenTypes.has(ti.name)) {
@@ -459,14 +475,8 @@ export async function migrateFullProject(
       allFiles.set(`src/app/features/${moduleKebab}/services/${svc.fileName}`, svc.content);
     }
 
-    // Style Preservator: generate Tailwind config if needed
+    // Style Preservator: preserved styles (Tailwind v4 config handled by scaffolder)
     const preservedStyles = preserveStyles(scannedProject);
-    if (preservedStyles.hasTailwind && preservedStyles.tailwindConfig) {
-      allFiles.set('tailwind.config.js', preservedStyles.tailwindConfig);
-    }
-    if (preservedStyles.hasTailwind && preservedStyles.postcssConfig) {
-      allFiles.set('postcss.config.js', preservedStyles.postcssConfig);
-    }
 
     // Theme at src/styles/
     allFiles.set('src/styles/_sb-primeng-theme.scss', styleResult.themeFile);
@@ -480,6 +490,7 @@ export async function migrateFullProject(
     // -----------------------------------------------------------------------
     // Step 11: Write all files to outputDir
     // -----------------------------------------------------------------------
+    console.log(`  [6/7] 📁 Escribiendo ${allFiles.size} archivos...`);
     for (const [filePath, content] of allFiles) {
       const fullPath = join(outputDir, filePath);
       mkdirSync(dirname(fullPath), { recursive: true });
@@ -510,19 +521,20 @@ export async function migrateFullProject(
     // Step 13b: Compile the generated Angular project
     // Runs npm install + ng build, parses errors, saves to API DB
     // -----------------------------------------------------------------------
+    console.log('  [7/7] 📦 Compilando proyecto Angular...');
     const compilationResult = await compileAndLogErrors(outputDir, moduleName);
 
     // -----------------------------------------------------------------------
     // Step 14: Return FullMigrationResult
     // -----------------------------------------------------------------------
-    const servicesGenerated = [...integrityValidated.values()].reduce(
+    const servicesGenerated = [...syntaxValidated.values()].reduce(
       (sum, c) => sum + c.services.length,
       0,
     );
 
     const migrationSummary: MigrationSummary = {
       componentsTotal: scannedProject.components.length,
-      componentsMigrated: integrityValidated.size,
+      componentsMigrated: syntaxValidated.size,
       componentsFailed,
       servicesGenerated,
       routesGenerated: (fixedRoutesContent.match(/loadComponent/g) ?? []).length,

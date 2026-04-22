@@ -54,8 +54,31 @@ export function validateTemplateIntegrity(components) {
         html = fixSelfClosingTags(html);
         // Fix 9: Remove empty attribute values
         html = html.replace(/\s+class=""/g, '');
+        // Fix 10: Balance mismatched HTML tags (NG5002 prevention)
+        html = balanceHtmlTags(html);
+        // Fix 11: PrimeNG severity — "destructive" → "danger" (React shadcn → PrimeNG)
+        html = html.replace(/severity="destructive"/g, 'severity="danger"');
+        html = html.replace(/\[severity\]="'destructive'"/g, '[severity]="\'danger\'"');
+        // Fix ternary severity bindings: 'destructive' → 'danger' (inside single quotes within bindings)
+        html = html.replace(/'destructive'/g, "'danger'");
+        // Fix 12: Fix unterminated quotes in bindings (e.g. [ngModel]="tipoServicio'...)
+        html = fixUnterminatedQuotes(html);
+        // Fix 13: Fix malformed p-select — ensure proper closing and attributes
+        html = html.replace(/<p-select\s+\[ngModel\]="([^"]*)"[^>]*>\s*<\/p-select>/g, '<p-select [ngModel]="$1()" (ngModelChange)="$1.set($$event)" placeholder="Seleccione"></p-select>');
         result.set(key, { ...component, componentHtml: html });
     }
+    return result;
+}
+/**
+ * Fix unterminated quotes in Angular template bindings.
+ * Detects patterns like [ngModel]="tipoServicio'space-y-2"> which have
+ * a single quote inside a double-quoted attribute, causing NG5002.
+ */
+function fixUnterminatedQuotes(html) {
+    // Only fix cases where a binding value clearly leaked into the next element
+    // Pattern: [attr]="value'followed-by-tag-content"> where the ' is NOT part of a valid expression
+    // We detect this by checking if after the ' there's a tag-like pattern (e.g. space-y-2">)
+    let result = html.replace(/(\[[\w.]+\]="[^"]*?)'(?=[a-z]+-[a-z])/g, '$1"');
     return result;
 }
 /**
@@ -70,5 +93,95 @@ function fixSelfClosingTags(html) {
         result = result.replace(new RegExp(`<${tag}([^>]*?)\\s*/>`, 'g'), `<${tag}$1></${tag}>`);
     }
     return result;
+}
+// ---------------------------------------------------------------------------
+// HTML Tag Balancer — fixes mismatched open/close tags (NG5002 prevention)
+// ---------------------------------------------------------------------------
+const VOID_ELEMENTS = new Set([
+    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+    'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
+/**
+ * Balance mismatched HTML tags by tracking the open/close stack.
+ * If a closing tag doesn't match the current open tag, fix it.
+ *
+ * This prevents NG5002 "Unexpected closing tag" errors.
+ */
+function balanceHtmlTags(html) {
+    // Tokenize: split into tags and text
+    const tokens = [];
+    let pos = 0;
+    const tagRe = /<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^>]*)?\s*\/?>/g;
+    let match;
+    while ((match = tagRe.exec(html)) !== null) {
+        if (match.index > pos) {
+            tokens.push(html.slice(pos, match.index));
+        }
+        tokens.push(match[0]);
+        pos = match.index + match[0].length;
+    }
+    if (pos < html.length) {
+        tokens.push(html.slice(pos));
+    }
+    // Track open tag stack
+    const stack = [];
+    const output = [];
+    for (const token of tokens) {
+        // Skip non-tag tokens (text, Angular control flow, etc.)
+        if (!token.startsWith('<')) {
+            output.push(token);
+            continue;
+        }
+        // Self-closing tag
+        if (token.endsWith('/>')) {
+            output.push(token);
+            continue;
+        }
+        // Closing tag
+        const closeMatch = token.match(/^<\/([a-zA-Z][a-zA-Z0-9-]*)\s*>/);
+        if (closeMatch) {
+            const tagName = closeMatch[1].toLowerCase();
+            // Find matching open tag in stack
+            const idx = stack.lastIndexOf(tagName);
+            if (idx === stack.length - 1) {
+                // Perfect match — pop and emit
+                stack.pop();
+                output.push(token);
+            }
+            else if (idx >= 0) {
+                // Mismatched — close intermediate tags first
+                while (stack.length > idx + 1) {
+                    const unclosed = stack.pop();
+                    output.push(`</${unclosed}>`);
+                }
+                stack.pop();
+                output.push(token);
+            }
+            else {
+                // No matching open tag — skip this closing tag (it's orphaned)
+                // This prevents NG5002
+            }
+            continue;
+        }
+        // Opening tag
+        const openMatch = token.match(/^<([a-zA-Z][a-zA-Z0-9-]*)/);
+        if (openMatch) {
+            const tagName = openMatch[1].toLowerCase();
+            // Skip void elements (they don't need closing)
+            if (!VOID_ELEMENTS.has(tagName)) {
+                stack.push(tagName);
+            }
+            output.push(token);
+            continue;
+        }
+        // Anything else (comments, Angular syntax, etc.)
+        output.push(token);
+    }
+    // Close any remaining unclosed tags
+    while (stack.length > 0) {
+        const unclosed = stack.pop();
+        output.push(`</${unclosed}>`);
+    }
+    return output.join('');
 }
 //# sourceMappingURL=template-integrity-layer.js.map

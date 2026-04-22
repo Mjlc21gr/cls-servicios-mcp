@@ -1,12 +1,12 @@
 // =============================================================================
-// Project Scaffolder — generates Angular 20 project skeleton files
+// Project Scaffolder — generates Angular 20 + PrimeNG 21 + Tailwind v4 project
 // =============================================================================
 
 import type { MigrationOptions, ProjectMeta, ScaffoldFiles } from './pipeline-types.js';
 import { toKebabCase } from '../utils/naming.utils.js';
 
 /**
- * Generates the Angular 20 + PrimeNG 19 project skeleton.
+ * Generates the Angular 20 + PrimeNG 21 + Tailwind v4 project skeleton.
  * Returns a map of file paths → file contents.
  */
 export function scaffoldProject(
@@ -18,9 +18,7 @@ export function scaffoldProject(
 ): ScaffoldFiles {
   const files = new Map<string, string>();
 
-  // Always generate .npmrc for PrimeNG peer dep compatibility
   files.set('.npmrc', 'legacy-peer-deps=true\n');
-
   files.set('package.json', generatePackageJson(moduleName, options, projectMeta, detectedDependencies));
   files.set('angular.json', generateAngularJson(moduleName));
   files.set('tsconfig.json', generateTsConfig());
@@ -29,22 +27,19 @@ export function scaffoldProject(
   files.set('src/app/app.config.ts', generateAppConfig());
   files.set('src/app/app.component.ts', generateAppComponent());
   files.set('src/index.html', generateIndexHtml(moduleName));
+  files.set('public/favicon.ico', ''); // placeholder
   files.set('src/styles.scss', generateStylesScss());
 
-  // Tailwind v4 — Angular uses .postcssrc.json for PostCSS config
-  files.set('.postcssrc.json', JSON.stringify({ plugins: { '@tailwindcss/postcss': {} } }, null, 2) + '\n');
-
-  // Tailwind v4 CSS entry point
-  files.set('src/tailwind.css', '@import "tailwindcss";\n');
-
-  // .postcssrc.json and tailwind.css already handle PostCSS config
+  // Tailwind v4: .postcssrc.json + tailwind.css (official Angular setup)
+  files.set('.postcssrc.json', generatePostcssRc());
+  files.set('src/tailwind.css', '@import "tailwindcss";\n@import "tailwindcss-primeui";\n');
 
   return { files };
 }
 
 
 // ---------------------------------------------------------------------------
-// package.json
+// package.json — aligned with CLS Clever project reference
 // ---------------------------------------------------------------------------
 
 function generatePackageJson(
@@ -54,51 +49,50 @@ function generatePackageJson(
   detectedDependencies?: readonly string[],
 ): string {
   const deps: Record<string, string> = {
-    '@angular/animations': '^20.0.0',
-    '@angular/common': '^20.0.0',
-    '@angular/compiler': '^20.0.0',
-    '@angular/core': '^20.0.0',
-    '@angular/forms': '^20.0.0',
-    '@angular/platform-browser': '^20.0.0',
-    '@angular/platform-browser-dynamic': '^20.0.0',
-    '@angular/router': '^20.0.0',
-    primeng: '^21.0.0',
-    '@primeng/themes': '^21.0.0',
-    primeicons: '^7.0.0',
-    rxjs: '^7.8.0',
-    tslib: '^2.6.0',
-    'zone.js': '^0.15.0',
+    '@angular/common': '^20.3.0',
+    '@angular/compiler': '^20.3.0',
+    '@angular/core': '^20.3.0',
+    '@angular/forms': '^20.3.0',
+    '@angular/platform-browser': '^20.3.0',
+    '@angular/router': '^20.3.0',
+    '@primeng/themes': '~21.0.0',
+    'primeicons': '^7.0.0',
+    'primeng': '21.1.1',
+    'rxjs': '~7.8.0',
+    'tslib': '^2.3.0',
   };
 
-  // Bug 5 Fix: Add detected third-party dependencies
+  // Add detected third-party dependencies from the React project
   if (detectedDependencies) {
-    const KNOWN_ANGULAR_PKGS = new Set([
-      '@angular/animations', '@angular/common', '@angular/compiler', '@angular/core',
-      '@angular/forms', '@angular/platform-browser', '@angular/platform-browser-dynamic',
-      '@angular/router', 'primeng', '@primeng/themes', 'primeicons', 'rxjs', 'tslib', 'zone.js',
+    const SKIP = new Set([
+      '@angular/common', '@angular/compiler', '@angular/core', '@angular/forms',
+      '@angular/platform-browser', '@angular/router', 'primeng', '@primeng/themes',
+      'primeicons', 'rxjs', 'tslib',
       'react', 'react-dom', 'react-router', 'react-router-dom',
+      'next', 'remix', '@remix-run/react', '@remix-run/node',
     ]);
     for (const dep of detectedDependencies) {
       const pkgName = dep.startsWith('@') ? dep.split('/').slice(0, 2).join('/') : dep.split('/')[0];
-      if (!KNOWN_ANGULAR_PKGS.has(pkgName) && !deps[pkgName]) {
+      if (!SKIP.has(pkgName) && !deps[pkgName]) {
         deps[pkgName] = '*';
       }
     }
   }
 
   const devDeps: Record<string, string> = {
-    '@angular-devkit/build-angular': '^20.0.0',
-    '@angular/cli': '^20.0.0',
-    '@angular/compiler-cli': '^20.0.0',
-    typescript: '^5.8.0',
-    // Bug 7 Fix: Add test runner dependencies
-    karma: '~6.4.0',
-    'karma-chrome-launcher': '~3.2.0',
-    'karma-coverage': '~2.2.0',
-    'karma-jasmine': '~5.1.0',
-    'karma-jasmine-html-reporter': '~2.1.0',
-    'jasmine-core': '~5.1.0',
-    '@types/jasmine': '~5.1.0',
+    '@angular/build': '^20.3.13',
+    '@angular/cli': '^20.3.10',
+    '@angular/compiler-cli': '^20.3.0',
+    '@angular/platform-browser-dynamic': '^20.3.0',
+    '@tailwindcss/postcss': '^4.1.18',
+    '@types/jest': '^29.5.14',
+    'jest': '^29.7.0',
+    'jest-environment-jsdom': '^29.7.0',
+    'jest-preset-angular': '^14.4.0',
+    'postcss': '^8.5.6',
+    'tailwindcss': '^4.1.18',
+    'tailwindcss-primeui': '^0.6.1',
+    'typescript': '~5.9.2',
   };
 
   const pkg: Record<string, unknown> = {
@@ -109,24 +103,20 @@ function generatePackageJson(
       ng: 'ng',
       start: 'ng serve',
       build: 'ng build',
-      test: 'ng test',
+      test: 'jest',
+      'test:watch': 'jest --watch',
+      'test:coverage': 'jest --coverage',
     },
     dependencies: deps,
     devDependencies: devDeps,
   };
-
-  // Tailwind CSS v4 is always included in CLS projects
-  (pkg.devDependencies as Record<string, string>)['tailwindcss'] = '^4.0.0';
-  (pkg.devDependencies as Record<string, string>)['autoprefixer'] = '^10.4.0';
-  (pkg.devDependencies as Record<string, string>)['postcss'] = '^8.4.0';
-  (pkg.devDependencies as Record<string, string>)['@tailwindcss/postcss'] = '^4.0.0';
 
   return JSON.stringify(pkg, null, 2) + '\n';
 }
 
 
 // ---------------------------------------------------------------------------
-// angular.json
+// angular.json — uses @angular/build (not @angular-devkit/build-angular)
 // ---------------------------------------------------------------------------
 
 function generateAngularJson(moduleName: string): string {
@@ -143,28 +133,25 @@ function generateAngularJson(moduleName: string): string {
         prefix: 'app',
         architect: {
           build: {
-            builder: '@angular-devkit/build-angular:application',
+            builder: '@angular/build:application',
             options: {
               outputPath: `dist/${projectName}`,
-              index: 'src/index.html',
               browser: 'src/main.ts',
-              polyfills: ['zone.js'],
               tsConfig: 'tsconfig.app.json',
+              inlineStyleLanguage: 'scss',
+              assets: [{ glob: '**/*', input: 'public' }],
               styles: [
                 'src/tailwind.css',
                 'src/styles.scss',
                 'node_modules/primeicons/primeicons.css',
               ],
-              stylePreprocessorOptions: {
-                includePaths: ['node_modules'],
-              },
               scripts: [],
             },
             configurations: {
               production: {
                 budgets: [
-                  { type: 'initial', maximumWarning: '500kB', maximumError: '1MB' },
-                  { type: 'anyComponentStyle', maximumWarning: '2kB', maximumError: '4kB' },
+                  { type: 'initial', maximumWarning: '500kB', maximumError: '2MB' },
+                  { type: 'anyComponentStyle', maximumWarning: '4kB', maximumError: '8kB' },
                 ],
                 outputHashing: 'all',
               },
@@ -177,19 +164,12 @@ function generateAngularJson(moduleName: string): string {
             defaultConfiguration: 'production',
           },
           serve: {
-            builder: '@angular-devkit/build-angular:dev-server',
+            builder: '@angular/build:dev-server',
             configurations: {
               production: { buildTarget: `${projectName}:build:production` },
               development: { buildTarget: `${projectName}:build:development` },
             },
             defaultConfiguration: 'development',
-          },
-          test: {
-            builder: '@angular-devkit/build-angular:karma',
-            options: {
-              tsConfig: 'tsconfig.app.json',
-              styles: ['src/styles.scss'],
-            },
           },
         },
       },
@@ -197,6 +177,18 @@ function generateAngularJson(moduleName: string): string {
   };
 
   return JSON.stringify(config, null, 2) + '\n';
+}
+
+// ---------------------------------------------------------------------------
+// .postcssrc.json — Tailwind v4 official Angular config
+// ---------------------------------------------------------------------------
+
+function generatePostcssRc(): string {
+  return JSON.stringify({
+    plugins: {
+      '@tailwindcss/postcss': {},
+    },
+  }, null, 2) + '\n';
 }
 
 
@@ -236,16 +228,12 @@ function generateTsConfig(): string {
   return JSON.stringify(config, null, 2) + '\n';
 }
 
-// ---------------------------------------------------------------------------
-// tsconfig.app.json
-// ---------------------------------------------------------------------------
-
 function generateTsConfigApp(): string {
   const config = {
     extends: './tsconfig.json',
     compilerOptions: {
       outDir: './out-tsc/app',
-      types: ['jasmine'],
+      types: ['jest'],
     },
     files: ['src/main.ts'],
     include: ['src/**/*.ts'],
@@ -253,7 +241,6 @@ function generateTsConfigApp(): string {
 
   return JSON.stringify(config, null, 2) + '\n';
 }
-
 
 // ---------------------------------------------------------------------------
 // src/main.ts
@@ -274,27 +261,33 @@ bootstrapApplication(AppComponent, appConfig)
 // ---------------------------------------------------------------------------
 
 function generateAppConfig(): string {
-  return `import { ApplicationConfig, provideZoneChangeDetection } from '@angular/core';
+  return `import { ApplicationConfig, provideBrowserGlobalErrorListeners, provideZonelessChangeDetection } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
-import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { providePrimeNG } from 'primeng/config';
-import Aura from '@primeng/themes/aura';
+import { definePreset } from '@primeuix/themes';
+import Aura from '@primeuix/themes/aura';
 
 import { routes } from './app.routes';
 
+const AppPreset = definePreset(Aura, {});
+
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideZoneChangeDetection({ eventCoalescing: true }),
-    provideRouter(routes),
     provideHttpClient(),
-    provideAnimationsAsync(),
+    provideBrowserGlobalErrorListeners(),
+    provideZonelessChangeDetection(),
+    provideRouter(routes),
     providePrimeNG({
       theme: {
-        preset: Aura,
-        options: { darkModeSelector: '.dark-mode' },
+        preset: AppPreset,
+        options: {
+          cssLayer: {
+            name: 'primeng',
+            order: 'theme, base, primeng',
+          },
+        },
       },
-      ripple: true,
     }),
   ],
 };
@@ -319,7 +312,6 @@ import { RouterOutlet } from '@angular/router';
 export class AppComponent {}
 `;
 }
-
 
 // ---------------------------------------------------------------------------
 // src/index.html
@@ -348,10 +340,7 @@ function generateIndexHtml(moduleName: string): string {
 // ---------------------------------------------------------------------------
 
 function generateStylesScss(): string {
-  return `/* PrimeNG 21 uses preset themes via providePrimeNG() in app.config.ts */
-
-/* Seguros Bolívar Design System theme */
-@use './styles/sb-primeng-theme';
+  return `/* PrimeNG 21 — theme configured via providePrimeNG() in app.config.ts */
 
 /* Global resets */
 *, *::before, *::after { box-sizing: border-box; }
@@ -359,43 +348,14 @@ function generateStylesScss(): string {
 html, body {
   margin: 0;
   padding: 0;
-  font-family: var(--sb-font-family, 'Montserrat', 'Segoe UI', system-ui, sans-serif);
-  font-size: var(--sb-font-size-base, 1rem);
-  color: var(--sb-gray-900, #212529);
-  background-color: var(--sb-white, #ffffff);
+  font-family: var(--font-family, 'Segoe UI', system-ui, -apple-system, sans-serif);
 }
 
 :focus-visible {
-  outline: 2px solid var(--sb-primary, #0066cc);
+  outline: 2px solid var(--p-primary-500, #0066cc);
   outline-offset: 2px;
 }
 
 html { scroll-behavior: smooth; }
-`;
-}
-
-// ---------------------------------------------------------------------------
-// tailwind.config.js (conditional)
-// ---------------------------------------------------------------------------
-
-function generateTailwindConfig(): string {
-  return `/** @type {import('tailwindcss').Config} */
-module.exports = {
-  content: ['./src/**/*.{html,ts}'],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-};
-`;
-}
-
-function generatePostcssConfig(): string {
-  return `module.exports = {
-  plugins: {
-    '@tailwindcss/postcss': {},
-    autoprefixer: {},
-  },
-};
 `;
 }

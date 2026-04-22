@@ -372,7 +372,7 @@ export async function runOptimizer(config: OptimizerConfig): Promise<OptimizerRe
     // ─── Step 2: Install deps + Compile ──────────────────────────────────
     log.push('[2] Installing deps...');
     cmd('npm install --legacy-peer-deps', OUT, 180_000);
-    cmd('npm install @angular-devkit/build-angular@^20.0.0 @angular/compiler-cli@^20.0.0 typescript@~5.8.0 --save-dev --legacy-peer-deps', OUT, 180_000);
+    cmd('npm install @angular/build@^20.3.13 @angular/compiler-cli@^20.3.0 typescript@~5.9.2 --save-dev --legacy-peer-deps', OUT, 180_000);
     cmd('npx ng analytics disable', OUT, 15_000);
 
     log.push('[3] Compiling (ng build)...');

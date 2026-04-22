@@ -61,7 +61,7 @@ export function collapseShadcnSelect(html: string): string {
     if (placeholderMatch) placeholder = placeholderMatch[1];
 
     const optionsJson = JSON.stringify(options);
-    return `<p-select [options]='${optionsJson}' optionLabel="label" optionValue="value" placeholder="${placeholder}"${ngModelBinding}></p-select>`;
+    return `<p-select [options]='${optionsJson}' optionLabel="label" optionValue="value" placeholder="${placeholder}"${ngModelBinding} />`;
   });
 }
 

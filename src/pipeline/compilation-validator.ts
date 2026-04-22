@@ -36,10 +36,14 @@ function cmd(
       timeout,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return { success: true, output: out };
+    return { success: true, output: typeof out === 'string' ? out : String(out ?? '') };
   } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    return { success: false, output: (e.stdout ?? '') + '\n' + (e.stderr ?? e.message ?? '') };
+    if (typeof err === 'string') return { success: false, output: err };
+    const e = err as Record<string, unknown>;
+    const stdout = typeof e.stdout === 'string' ? e.stdout : '';
+    const stderr = typeof e.stderr === 'string' ? e.stderr : '';
+    const msg = typeof e.message === 'string' ? e.message : String(err);
+    return { success: false, output: stdout + '\n' + (stderr || msg) };
   }
 }
 
@@ -115,6 +119,8 @@ function parseCompilationErrors(output: string): CompilationError[] {
   // Deduplicate by code + first 80 chars of message
   const seen = new Set<string>();
   return errors.filter(e => {
+    // Filter out Node.js internal errors that aren't real compilation errors
+    if (e.message.includes('Cannot create property') && e.message.includes('on string')) return false;
     const key = `${e.code}|${e.message.slice(0, 80)}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -166,7 +172,7 @@ export async function compileAndLogErrors(
 
   // Step 2: Ensure Angular build tooling is available
   cmd(
-    'npm install @angular-devkit/build-angular@^20.0.0 @angular/compiler-cli@^20.0.0 typescript@~5.8.0 --save-dev --legacy-peer-deps',
+    'npm install @angular/build@^20.3.13 @angular/compiler-cli@^20.3.0 typescript@~5.9.2 --save-dev --legacy-peer-deps',
     outputDir,
     180_000,
   );
@@ -180,8 +186,24 @@ export async function compileAndLogErrors(
 
   // Step 4: Parse errors
   const compilationErrors = parseCompilationErrors(buildOutput);
-  const buildSuccess = compilationErrors.length === 0 &&
-    buildOutput.toLowerCase().includes('bundle generation complete');
+
+  // Determine success: ONLY if build command succeeded AND no errors found AND output confirms completion
+  const buildCommandOk = buildResult.success;
+  const hasCompletionMarker = buildOutput.toLowerCase().includes('bundle generation complete') ||
+    buildOutput.toLowerCase().includes('application bundle generation complete') ||
+    buildOutput.toLowerCase().includes('output path:');
+  const buildSuccess = buildCommandOk && compilationErrors.length === 0 && hasCompletionMarker;
+
+  // If build command failed but we found 0 parsed errors, the build still failed
+  // Report it honestly
+  if (!buildCommandOk && compilationErrors.length === 0) {
+    compilationErrors.push({
+      code: 'BUILD_FAILED',
+      message: 'ng build failed but no specific errors were parsed. Run ng build manually to see details.',
+      category: 'build_failure',
+      mcpLayer: 'unknown',
+    });
+  }
 
   // Step 5 & 6: Save to remote API database (if configured)
   let savedToDb = false;

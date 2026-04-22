@@ -40,7 +40,7 @@ const EVENT_MAP: Record<string, string> = {
 const REACT_TAG_TO_ANGULAR: Record<string, string> = {
   // shadcn/ui and common React UI components → PrimeNG/Semantic HTML
   'Card': 'p-card', 'CardHeader': 'header', 'CardContent': 'section', 'CardTitle': 'h3', 'CardDescription': 'p',
-  'Button': 'p-button', 'Input': 'input', 'Label': 'label', 'Textarea': 'textarea',
+  'Button': 'button', 'Input': 'input', 'Label': 'label', 'Textarea': 'textarea',
   'Select': 'p-select', 'SelectTrigger': 'span', 'SelectContent': 'section', 'SelectItem': 'span', 'SelectValue': 'span',
   'Badge': 'p-tag', 'Dialog': 'p-dialog', 'DialogTrigger': 'span', 'DialogContent': 'section',
   'Table': 'p-table', 'TableHeader': 'thead', 'TableBody': 'tbody', 'TableRow': 'tr', 'TableHead': 'th', 'TableCell': 'td',
@@ -152,8 +152,10 @@ function renderAttribute(attr: JSXAttribute): { text: string; binding?: BindingD
 
   // --- className (dynamic) → [class]="expr" ---
   if (attr.name === 'className' && attr.isDynamic) {
+    // ALL inner double quotes must become single quotes — the outer binding uses double quotes
+    const safeValue = value.split('"').join("'");
     return {
-      text: `[class]="${value}"`,
+      text: `[class]="${safeValue}"`,
       binding: {
         type: 'property',
         angularSyntax: '[class]',
@@ -198,7 +200,7 @@ function renderAttribute(attr: JSXAttribute): { text: string; binding?: BindingD
       return { text: '' };
     }
     // MLFIX-QUOTES: escape double quotes inside binding values to single quotes
-    const safeValue = value.replace(/(?<=\s)"([^"]*)"(?=\s|$)/g, "'$1'");
+    const safeValue = value.split('"').join("'");
     return {
       text: `[${attr.name}]="${safeValue}"`,
       binding: {
@@ -349,6 +351,42 @@ function renderNode(
   }
   const attrStr = attrParts.length > 0 ? ' ' + attrParts.join(' ') : '';
 
+  // PrimeNG self-closing components — these don't accept HTML children
+  // Their children (from React) are converted to [options], [items], etc. by post-processing
+  const PRIMENG_SELF_CLOSING = new Set([
+    'p-select', 'p-checkbox', 'p-toggleswitch', 'p-slider', 'p-rating',
+    'p-inputnumber', 'p-datepicker', 'p-autocomplete', 'p-multiselect',
+    'p-radiobutton', 'p-progressbar', 'p-skeleton', 'p-divider', 'p-image',
+  ]);
+  if (PRIMENG_SELF_CLOSING.has(tag)) {
+    if (tag === 'p-select' && node.children.length > 0) {
+      const options = extractSelectOptions(node);
+      if (options.length > 0) {
+        const optionsJson = JSON.stringify(options);
+        // Extract value binding for ngModel
+        const valueAttr = node.attributes.find(a => a.name === 'value' && a.isDynamic);
+        const ngModel = valueAttr
+          ? ` [(ngModel)]="${typeof valueAttr.value === 'string' ? valueAttr.value : valueAttr.value.expression}"`
+          : '';
+        // Extract placeholder from SelectValue child
+        let placeholder = 'Seleccione';
+        const findPlaceholder = (children: (JSXNode | JSXExpression | string)[]) => {
+          for (const c of children) {
+            if (typeof c !== 'object' || !('tag' in c)) continue;
+            if (c.tag === 'SelectValue') {
+              const ph = c.attributes.find(a => a.name === 'placeholder');
+              if (ph) placeholder = typeof ph.value === 'string' ? ph.value : ph.value.expression;
+            }
+            if (c.children?.length) findPlaceholder(c.children);
+          }
+        };
+        findPlaceholder(node.children);
+        return `${indent}<p-select [options]='${optionsJson}' optionLabel="label" optionValue="value"${ngModel} placeholder="${placeholder}" />`;
+      }
+    }
+    return `${indent}<${tag}${attrStr} />`;
+  }
+
   // Self-closing void elements
   if (VOID_ELEMENTS.has(tag.toLowerCase()) && node.children.length === 0) {
     return `${indent}<${tag}${attrStr} />`;
@@ -371,6 +409,42 @@ function renderNode(
 
 // ---------------------------------------------------------------------------
 // Main entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract options from Select children (SelectItem nodes).
+ */
+function extractSelectOptions(node: JSXNode): Array<{ label: string; value: string }> {
+  const options: Array<{ label: string; value: string }> = [];
+
+  function walk(children: (JSXNode | JSXExpression | string)[]) {
+    for (const child of children) {
+      if (typeof child === 'string') continue;
+      if ('type' in child && !('tag' in child)) continue;
+      const n = child as JSXNode;
+
+      // Match SelectItem by ORIGINAL tag name (before conversion)
+      // SelectItem has tag 'SelectItem' or 'option' with value attr + text children
+      if (n.tag === 'SelectItem' || n.tag === 'option') {
+        const valueAttr = n.attributes.find(a => a.name === 'value');
+        if (valueAttr) {
+          const val = typeof valueAttr.value === 'string' ? valueAttr.value : valueAttr.value.expression;
+          const label = n.children.filter(c => typeof c === 'string').join('').trim();
+          if (label && val) {
+            options.push({ label, value: val });
+          }
+        }
+      }
+
+      // Recurse into all children (SelectContent, SelectTrigger, etc.)
+      if (n.children.length > 0) walk(n.children);
+    }
+  }
+
+  walk(node.children);
+  return options;
+}
+
 // ---------------------------------------------------------------------------
 
 /**
@@ -484,8 +558,8 @@ function convertShadcnSelectToPrimeNG(html: string): string {
     }
 
     if (options.length === 0) {
-      // No options found, return as-is but clean up
-      return `<p-select${attrs}></p-select>`;
+      // No options found — self-closing
+      return `<p-select${attrs} />`;
     }
 
     // Build options array string
@@ -500,7 +574,7 @@ function convertShadcnSelectToPrimeNG(html: string): string {
       .replace(/\s*onValueChange="[^"]*"/g, '')
       .trim();
 
-    // Build the clean p-select tag — ensure space after tag name
-    return `<p-select [options]='${optionsStr}' optionLabel="label" optionValue="value" placeholder="Seleccione"></p-select>`;
+    // Build the clean p-select tag — self-closing
+    return `<p-select [options]='${optionsStr}' optionLabel="label" optionValue="value" placeholder="Seleccione" />`;
   });
 }
